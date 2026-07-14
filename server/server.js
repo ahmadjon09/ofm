@@ -21,6 +21,7 @@ import morgan from 'morgan';
 import 'express-async-errors';
 import { v4 as uuidv4 } from 'uuid';
 import validator from 'validator';
+import { startBot } from './bot.js';
 
 // ============================================================================
 // SECTION: ENVIRONMENT VALIDATION
@@ -266,6 +267,10 @@ const userSchema = new mongoose.Schema(
         password: { type: String, required: true, minlength: 6, select: false },
         role: { type: String, enum: ['admin', 'manager', 'worker'], default: 'worker' },
         isActive: { type: Boolean, default: true },
+        // Telegram bot orqali "raqamni ulashish" bosilgach shu yerga yoziladi.
+        // Shu maydon orqali bot foydalanuvchini keyingi safar avtomatik tanib oladi.
+        telegramId: { type: Number, default: null, index: true, sparse: true, unique: true },
+        telegramLinkedAt: { type: Date, default: null },
     },
     { timestamps: true, versionKey: 'version' }
 );
@@ -1538,6 +1543,14 @@ async function startServer() {
         console.log(`${colors.green}[Server] http://localhost:${config.port} manzilida ishga tushdi.${colors.reset}`);
         console.log(`${colors.cyan}[API] Asosiy manzil: /api/v1${colors.reset}`);
     });
+
+    // Telegram bot — DB ulanib, modellar ro'yxatdan o'tgandan keyin ishga tushadi.
+    // BOT_TOKEN .env faylida bo'lmasa, bot shunchaki ishga tushmaydi (server ishlashda davom etadi).
+    try {
+        await startBot();
+    } catch (err) {
+        console.error(`${colors.red}[Bot] Ishga tushirishda xatolik: ${err.message}${colors.reset}`);
+    }
 }
 
 async function gracefulShutdown(signal) {

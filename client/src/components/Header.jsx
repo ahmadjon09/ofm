@@ -5,14 +5,13 @@ import Cookies from "js-cookie";
 import { ContextData } from "../contextData/Context";
 
 const links = [
-    { name: "Dashboard", path: "/" },
-    { name: "Products", path: "/products" },
-    { name: "Clients", path: "/clients" },
-    { name: "Orders", path: "/orders" },
-    { name: "Hodimlar", path: "/users" },
+    { name: "Bosh sahifa", path: "/" },
+    { name: "Mahsulotlar", path: "/products" },
+    { name: "Mijozlar", path: "/clients" },
+    { name: "Buyurtmalar", path: "/orders" },
     { name: "Kassa", path: "/kassa" },
+    { name: "Xodimlar", path: "/users" },
 ];
-
 export const Header = () => {
     const [open, setOpen] = useState(false);
     const [profileOpen, setProfileOpen] = useState(false);
