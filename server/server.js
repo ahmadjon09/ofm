@@ -1467,6 +1467,20 @@ app.use('/api/v1', router);
 // SECTION: 404 HANDLER
 // ============================================================================
 
+const keepServerAlive = () => {
+    if (!process.env.APP_URL) return;
+
+    setInterval(async () => {
+        try {
+            await fetch(`${process.env.APP_URL}/health`);
+            console.log('🔄 Alive');
+        } catch (e) {
+            console.log('Ping failed');
+        }
+    }, 10 * 60 * 1000);
+};
+keepServerAlive()
+
 app.use((req, res) => {
     return sendError(res, 404, "So'ralgan manzil topilmadi.");
 });
