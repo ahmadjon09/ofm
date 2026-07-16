@@ -278,30 +278,61 @@ export const Product = () => {
   const handleSizeChange = (index, field, value) => {
     const newSizes = [...form.sizes];
     newSizes[index][field] = value;
-    setForm({ ...form, sizes: newSizes });
-    setFormErrors((prev) => ({ ...prev, [`size-${index}-${field}`]: undefined }));
+
+    setForm({
+      ...form,
+      sizes: newSizes,
+    });
+
+    setFormErrors((prev) => ({
+      ...prev,
+      [`size-${index}-${field}`]: undefined,
+    }));
   };
 
-  const addSizeRow = () => setForm({ ...form, sizes: [...form.sizes, emptySize()] });
+  const addSizeRow = () => {
+    setForm({
+      ...form,
+      sizes: [...form.sizes, emptySize()],
+    });
+  };
+
   const removeSizeRow = (index) => {
     if (form.sizes.length <= 1) return;
-    setForm({ ...form, sizes: form.sizes.filter((_, i) => i !== index) });
+
+    setForm({
+      ...form,
+      sizes: form.sizes.filter((_, i) => i !== index),
+    });
   };
 
   const validateForm = () => {
     const errors = {};
-    if (!form.name.trim()) errors.name = 'Mahsulot nomi majburiy.';
-    if (!form.category.trim()) errors.category = 'Kategoriya tanlanishi shart.';
+
+    if (!form.name.trim()) {
+      errors.name = 'Mahsulot nomi majburiy.';
+    }
+
+    if (!form.category.trim()) {
+      errors.category = 'Kategoriya tanlanishi shart.';
+    }
+
     form.sizes.forEach((s, i) => {
       ['size', 'price', 'boxes', 'box_kg'].forEach((field) => {
+        const value = Number(s[field]);
+
         if (s[field] === '' || s[field] === null || s[field] === undefined) {
           errors[`size-${i}-${field}`] = 'Majburiy';
-        } else if (Number(s[field]) <= 0) {
-          errors[`size-${i}-${field}`] = '> 0 bo‘lishi kerak';
+        } else if (Number.isNaN(value)) {
+          errors[`size-${i}-${field}`] = 'Faqat son kiriting';
+        } else if (value < 0) {
+          errors[`size-${i}-${field}`] = '0 yoki undan katta bo‘lishi kerak';
         }
       });
     });
+
     setFormErrors(errors);
+
     return Object.keys(errors).length === 0;
   };
 
