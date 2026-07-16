@@ -2,6 +2,14 @@ import { Telegraf, Markup } from 'telegraf';
 import mongoose from 'mongoose';
 import dayjs from 'dayjs';
 import https from 'https';
+import dns from 'dns';
+
+// Render (va boshqa ko'p konteyner-hostinglar)da chiquvchi ulanishlar
+// ba'zan IPv6'ni afzal ko'radi, lekin IPv6 egress to'liq ishlamay,
+// "socket hang up" / vaqt tugashi bilan yakunlanadi. IPv4'ni majburlab
+// qo'yish bu muammoning eng keng tarqalgan yechimi.
+dns.setDefaultResultOrder('ipv4first');
+
 import {
     buildProductsExcel,
     buildOrdersExcel,
@@ -16,12 +24,14 @@ import {
 } from './utils/reportpdf.js';
 
 // Telegram API'ga (ayniqsa katta fayl yuborishda) barqarorroq ulanish uchun
-// maxsus HTTPS agent: ulanishni saqlab turadi (keepAlive) va uzunroq kutadi.
+// maxsus HTTPS agent: ulanishni saqlab turadi (keepAlive), IPv4'ni majburlaydi
+// va uzunroq kutadi.
 const telegramAgent = new https.Agent({
     keepAlive: true,
     keepAliveMsecs: 10000,
     maxSockets: 50,
     timeout: 120000, // 120s — katta fayl yuklash uchun yetarli vaqt
+    family: 4, // IPv4'ni majburlash
 });
 
 const MONTH_NAMES_UZ = [
@@ -92,6 +102,14 @@ async function sendReport(ctx, { buildFn, args = [], filename }) {
     const startedAt = Date.now();
     let buffer;
 
+    // Callback tugmasining "toast" xabari tez yo'qolib ketadi va uzoq
+    // hisobotlarda foydalanuvchi hech narsa bo'layotganini bilmay qoladi —
+    // shuning uchun alohida chat xabari yuboramiz va keyin uni yangilaymiz.
+    let statusMsg;
+    try {
+        statusMsg = await ctx.reply('⏳ Hisobot tayyorlanmoqda, biroz kuting...');
+    } catch (_) { /* status xabari yuborilmasa ham asosiy jarayon davom etadi */ }
+
     try {
         console.log(`[Report] Boshlandi: ${filename}`);
         buffer = await buildFn(...args);
@@ -103,10 +121,19 @@ async function sendReport(ctx, { buildFn, args = [], filename }) {
         console.log(`[Report] Tayyor: ${filename} (${(buffer.length / 1024).toFixed(1)} KB, ${Date.now() - startedAt}ms)`);
     } catch (err) {
         console.error(`[Report] Yaratishda XATOLIK (${filename}):`, err);
-        await ctx.reply(
-            `❌ Hisobotni tayyorlashda xatolik yuz berdi.\nSabab: ${err.message || 'Noma\'lum xatolik'}`
-        ).catch(() => { });
+        if (statusMsg) {
+            await ctx.telegram
+                .editMessageText(ctx.chat.id, statusMsg.message_id, undefined,
+                    `❌ Hisobotni tayyorlashda xatolik yuz berdi.\nSabab: ${err.message || 'Noma\'lum xatolik'}`)
+                .catch(() => ctx.reply(`❌ Hisobotni tayyorlashda xatolik yuz berdi.\nSabab: ${err.message || 'Noma\'lum xatolik'}`).catch(() => { }));
+        }
         return;
+    }
+
+    if (statusMsg) {
+        await ctx.telegram
+            .editMessageText(ctx.chat.id, statusMsg.message_id, undefined, '📤 Fayl yuborilmoqda...')
+            .catch(() => { });
     }
 
     // Yuborishda ("socket hang up" kabi) vaqtinchalik tarmoq xatolari uchun
@@ -116,6 +143,9 @@ async function sendReport(ctx, { buildFn, args = [], filename }) {
         try {
             await ctx.replyWithDocument({ source: buffer, filename });
             console.log(`[Report] Yuborildi: ${filename} (${attempt}-urinish)`);
+            if (statusMsg) {
+                await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => { });
+            }
             return;
         } catch (err) {
             const transient = isTransientNetworkError(err);
@@ -124,12 +154,25 @@ async function sendReport(ctx, { buildFn, args = [], filename }) {
                 err
             );
 
+            if (statusMsg) {
+                await ctx.telegram
+                    .editMessageText(ctx.chat.id, statusMsg.message_id, undefined,
+                        `📤 Fayl yuborilmoqda... (qayta urinish ${attempt}/${maxAttempts})`)
+                    .catch(() => { });
+            }
+
             if (!transient || attempt === maxAttempts) {
-                await ctx.reply(
+                const failText =
                     `❌ Faylni yuborishda xatolik yuz berdi (${attempt}-urinishdan keyin).\n` +
                     `Sabab: ${err.message || 'Noma\'lum xatolik'}\n\n` +
-                    `Iltimos, qayta urinib ko'ring yoki administratorga xabar bering.`
-                ).catch(() => { });
+                    `Iltimos, qayta urinib ko'ring yoki administratorga xabar bering.`;
+                if (statusMsg) {
+                    await ctx.telegram
+                        .editMessageText(ctx.chat.id, statusMsg.message_id, undefined, failText)
+                        .catch(() => ctx.reply(failText).catch(() => { }));
+                } else {
+                    await ctx.reply(failText).catch(() => { });
+                }
                 return;
             }
 
@@ -473,4 +516,4 @@ export async function startBot() {
     process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
     return bot;
-}   
+}
