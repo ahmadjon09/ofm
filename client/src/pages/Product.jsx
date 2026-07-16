@@ -869,7 +869,7 @@ export const Product = () => {
                           <input
                             type="number"
                             step="1"
-                            min="1"
+                            min="0"
                             value={size.boxes}
                             onChange={(e) => handleSizeChange(idx, 'boxes', e.target.value)}
                             className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none ${formErrors[`size-${idx}-boxes`] ? 'border-red-400' : 'border-gray-300'
