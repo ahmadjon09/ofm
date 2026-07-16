@@ -799,7 +799,7 @@ const clientController = {
         const { id } = req.params;
         if (!isValidObjectId(id)) throw new ApiError(400, "Noto'g'ri ID format.");
 
-        const { name, phone } = req.body;
+        const { name, phone, debt } = req.body;
         const client = await Client.findById(id);
         if (!client) throw new ApiError(404, "Mijoz topilmadi.");
 
@@ -808,6 +808,7 @@ const clientController = {
             if (!isValidPhone(phone)) throw new ApiError(400, "Telefon raqami noto'g'ri formatda.");
             client.phone = phone;
         }
+        if (debt) client.debt = debt
 
         await client.save();
 
