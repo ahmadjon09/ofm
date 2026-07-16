@@ -1,0 +1,30 @@
+{
+  "short_name": "OFM",
+  "name": "OFM",
+  "description": "Fun and challenging multiplayer quiz game. Test your knowledge and compete with friends!",
+  "icons": [
+    {
+      "src": "/logo.jpg",
+      "sizes": "192x192",
+      "type": "image/jpg",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/logo.jpg",
+      "sizes": "512x512",
+      "type": "image/jpg",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#4338CA",
+  "background_color": "#312E81",
+  "categories": [
+    "crm"
+  ],
+  "lang": "uz",
+  "dir": "ltr"
+}
