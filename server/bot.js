@@ -59,6 +59,33 @@ function exportKeyboard(prefix, extra = '') {
 }
 
 // ---------------------------------------------------------------------------
+// Hisobot yaratish + yuborishni xavfsiz bajaruvchi wrapper
+// (xato yuz bersa foydalanuvchiga ham, Render logiga ham to'liq ma'lumot beradi)
+// ---------------------------------------------------------------------------
+async function sendReport(ctx, { buildFn, args = [], filename }) {
+    const startedAt = Date.now();
+    try {
+        console.log(`[Report] Boshlandi: ${filename}`);
+        const buffer = await buildFn(...args);
+
+        if (!buffer || buffer.length === 0) {
+            throw new Error('Hisobot bo\'sh buffer qaytardi (0 bayt)');
+        }
+
+        console.log(`[Report] Tayyor: ${filename} (${(buffer.length / 1024).toFixed(1)} KB, ${Date.now() - startedAt}ms)`);
+
+        await ctx.replyWithDocument({ source: buffer, filename });
+    } catch (err) {
+        console.error(`[Report] XATOLIK (${filename}):`, err);
+        await ctx.reply(
+            `❌ Hisobotni tayyorlashda xatolik yuz berdi.\n` +
+            `Sabab: ${err.message || 'Noma\'lum xatolik'}\n\n` +
+            `Iltimos, qayta urinib ko'ring yoki administratorga xabar bering.`
+        ).catch(() => { });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // BOTNI ISHGA TUSHIRISH
 // ---------------------------------------------------------------------------
 
@@ -201,15 +228,21 @@ export async function startBot() {
     bot.action('products:excel', requireAdmin, async (ctx) => {
         await ctx.answerCbQuery('Tayyorlanmoqda...');
         const products = await Product.find().sort({ category: 1, name: 1 }).lean({ virtuals: true });
-        const buffer = await buildProductsExcel(products);
-        await ctx.replyWithDocument({ source: buffer, filename: `mahsulotlar_${dayjs().format('YYYY-MM-DD')}.xlsx` });
+        await sendReport(ctx, {
+            buildFn: buildProductsExcel,
+            args: [products],
+            filename: `mahsulotlar_${dayjs().format('YYYY-MM-DD')}.xlsx`,
+        });
     });
 
     bot.action('products:pdf', requireAdmin, async (ctx) => {
         await ctx.answerCbQuery('Tayyorlanmoqda...');
         const products = await Product.find().sort({ category: 1, name: 1 }).lean({ virtuals: true });
-        const buffer = await buildProductsPdf(products);
-        await ctx.replyWithDocument({ source: buffer, filename: `mahsulotlar_${dayjs().format('YYYY-MM-DD')}.pdf` });
+        await sendReport(ctx, {
+            buildFn: buildProductsPdf,
+            args: [products],
+            filename: `mahsulotlar_${dayjs().format('YYYY-MM-DD')}.pdf`,
+        });
     });
 
     // -------------------------------------------------------------------
@@ -258,11 +291,17 @@ export async function startBot() {
         }
 
         if (format === 'excel') {
-            const buffer = await buildOrdersExcel(orders, `${monthLabel} — Savdo hisoboti`);
-            await ctx.replyWithDocument({ source: buffer, filename: `savdo_${fileLabel}.xlsx` });
+            await sendReport(ctx, {
+                buildFn: buildOrdersExcel,
+                args: [orders, `${monthLabel} — Savdo hisoboti`],
+                filename: `savdo_${fileLabel}.xlsx`,
+            });
         } else {
-            const buffer = await buildOrdersPdf(orders, `${monthLabel} — Savdo hisoboti`);
-            await ctx.replyWithDocument({ source: buffer, filename: `savdo_${fileLabel}.pdf` });
+            await sendReport(ctx, {
+                buildFn: buildOrdersPdf,
+                args: [orders, `${monthLabel} — Savdo hisoboti`],
+                filename: `savdo_${fileLabel}.pdf`,
+            });
         }
     });
 
@@ -286,8 +325,11 @@ export async function startBot() {
             .sort({ createdAt: -1 })
             .limit(500)
             .lean();
-        const buffer = await buildKassaExcel(history);
-        await ctx.replyWithDocument({ source: buffer, filename: `kassa_${dayjs().format('YYYY-MM-DD')}.xlsx` });
+        await sendReport(ctx, {
+            buildFn: buildKassaExcel,
+            args: [history],
+            filename: `kassa_${dayjs().format('YYYY-MM-DD')}.xlsx`,
+        });
     });
 
     bot.action('kassa:pdf', requireAdmin, async (ctx) => {
@@ -298,8 +340,11 @@ export async function startBot() {
             .sort({ createdAt: -1 })
             .limit(500)
             .lean();
-        const buffer = await buildKassaPdf(history);
-        await ctx.replyWithDocument({ source: buffer, filename: `kassa_${dayjs().format('YYYY-MM-DD')}.pdf` });
+        await sendReport(ctx, {
+            buildFn: buildKassaPdf,
+            args: [history],
+            filename: `kassa_${dayjs().format('YYYY-MM-DD')}.pdf`,
+        });
     });
 
     // -------------------------------------------------------------------
@@ -317,15 +362,21 @@ export async function startBot() {
     bot.action('debtors:excel', requireAdmin, async (ctx) => {
         await ctx.answerCbQuery('Tayyorlanmoqda...');
         const clients = await Client.find({ debt: { $gt: 0 } }).sort({ debt: -1 }).lean();
-        const buffer = await buildDebtorsExcel(clients);
-        await ctx.replyWithDocument({ source: buffer, filename: `qarzdorlar_${dayjs().format('YYYY-MM-DD')}.xlsx` });
+        await sendReport(ctx, {
+            buildFn: buildDebtorsExcel,
+            args: [clients],
+            filename: `qarzdorlar_${dayjs().format('YYYY-MM-DD')}.xlsx`,
+        });
     });
 
     bot.action('debtors:pdf', requireAdmin, async (ctx) => {
         await ctx.answerCbQuery('Tayyorlanmoqda...');
         const clients = await Client.find({ debt: { $gt: 0 } }).sort({ debt: -1 }).lean();
-        const buffer = await buildDebtorsPdf(clients);
-        await ctx.replyWithDocument({ source: buffer, filename: `qarzdorlar_${dayjs().format('YYYY-MM-DD')}.pdf` });
+        await sendReport(ctx, {
+            buildFn: buildDebtorsPdf,
+            args: [clients],
+            filename: `qarzdorlar_${dayjs().format('YYYY-MM-DD')}.pdf`,
+        });
     });
 
     // -------------------------------------------------------------------
@@ -344,8 +395,19 @@ export async function startBot() {
         console.error(`[Bot] Xatolik (${ctx.updateType}):`, err);
     });
 
-    await bot.launch();
+    // Render qayta deploy/restart qilganda eski instance bilan
+    // "409 Conflict" bo'lmasligi uchun eski pending update'larni tashlab yuboramiz.
+    await bot.launch({ dropPendingUpdates: true });
     console.log('[Bot] Telegram bot ishga tushdi ✅');
+
+    // Xotira yoki kutilmagan xatoliklar sabab process jimgina o'lib qolmasligi
+    // uchun (Render logida ko'rinishi kerak):
+    process.on('unhandledRejection', (reason) => {
+        console.error('[Bot] Unhandled promise rejection:', reason);
+    });
+    process.on('uncaughtException', (err) => {
+        console.error('[Bot] Uncaught exception:', err);
+    });
 
     process.once('SIGINT', () => bot.stop('SIGINT'));
     process.once('SIGTERM', () => bot.stop('SIGTERM'));
