@@ -372,7 +372,7 @@ const clientSchema = new mongoose.Schema(
     {
         name: { type: String, required: true, trim: true },
         phone: { type: String, required: true, trim: true },
-        debt: { type: Number, default: 0, min: 0 },
+        debt: { type: Number, default: 0 },
         orders: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Order' }],
         paymentHistory: [paymentHistorySchema],
     },
