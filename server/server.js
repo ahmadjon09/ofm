@@ -836,7 +836,7 @@ const clientController = {
      */
     async addPayment(req, res) {
         const { id } = req.params;
-        const { amount, note, addToDebt } = req.body;
+        const { amount, note } = req.body;
         if (!isValidObjectId(id)) throw new ApiError(400, "Noto'g'ri ID format.");
         if (!amount || amount <= 0) throw new ApiError(400, "To'lov summasi noto'g'ri.");
 
@@ -844,22 +844,12 @@ const clientController = {
         if (!client) throw new ApiError(404, "Mijoz topilmadi.");
 
         await client.addPayment(amount, note || '', req.user._id);
-
-        if (!addToDebt) {
-            await kassaAddIncome(
-                order.orderTotal,
-                {
-                    client: client._id,
-                    clientName: client.name,
-                    note: `Naqd savdo (Buyurtma #${order._id})`,
-                    user: req.user._id,
-                },
-                session
-            );
-        } else {
-            client.debt = (client.debt || 0) + order.orderTotal;
-        }
-
+        const kassa = await kassaAddIncome(amount, {
+            client: client._id,
+            clientName: client.name,
+            note: note || `${client.name} tomonidan qarz to'lovi`,
+            user: req.user._id,
+        });
         return sendSuccess(res, 200, "Qarz muvaffaqiyatli to'landi.", { client, kassaBalance: kassa.balance });
     },
 
