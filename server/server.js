@@ -843,12 +843,20 @@ const clientController = {
 
         await client.addPayment(amount, note || '', req.user._id);
 
-        const kassa = await kassaAddIncome(amount, {
-            client: client._id,
-            clientName: client.name,
-            note: note || `${client.name} tomonidan qarz to'lovi`,
-            user: req.user._id,
-        });
+        if (addToDebt === false) {
+            await kassaAddIncome(
+                order.orderTotal,
+                {
+                    client: client._id,
+                    clientName: client.name,
+                    note: `Naqd savdo (Buyurtma #${order._id})`,
+                    user: req.user._id,
+                },
+                session
+            );
+        } else {
+            client.debt = (client.debt || 0) + order.orderTotal;
+        }
 
         return sendSuccess(res, 200, "Qarz muvaffaqiyatli to'landi.", { client, kassaBalance: kassa.balance });
     },
