@@ -836,7 +836,7 @@ const clientController = {
      */
     async addPayment(req, res) {
         const { id } = req.params;
-        const { amount, note } = req.body;
+        const { amount, note, addToDebt } = req.body;
         if (!isValidObjectId(id)) throw new ApiError(400, "Noto'g'ri ID format.");
         if (!amount || amount <= 0) throw new ApiError(400, "To'lov summasi noto'g'ri.");
 
@@ -845,7 +845,7 @@ const clientController = {
 
         await client.addPayment(amount, note || '', req.user._id);
 
-        if (addToDebt === false) {
+        if (!addToDebt) {
             await kassaAddIncome(
                 order.orderTotal,
                 {
