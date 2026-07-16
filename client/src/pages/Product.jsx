@@ -707,18 +707,6 @@ export const Product = () => {
                                 title={`Narx: $${s.price} · Quti: ${s.boxes} × ${s.box_kg}kg`}
                               >
                                 {s.size}
-                                {!product.isDeleted && (
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      openEditWithSizeRemoved(product, s);
-                                    }}
-                                    className="text-gray-400 hover:text-red-600 leading-none"
-                                    aria-label="O‘lchamni o‘chirish"
-                                  >
-                                    <X size={12} />
-                                  </button>
-                                )}
                               </span>
                             ))}
                           </div>
