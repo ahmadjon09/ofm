@@ -19,10 +19,12 @@ import {
   DollarSign,
   ArrowLeft,
   Eye,
+  Layers, // Icon for boxes
 } from 'lucide-react';
 
 // ---------- Constants ----------
-const CATEGORIES = ["Melkiy",
+const CATEGORIES = [
+  "Melkiy",
   "Krupniy",
   "Ostriy",
   "Parma",
@@ -33,7 +35,8 @@ const CATEGORIES = ["Melkiy",
   "Chupik",
   "Akfa",
   "Polvon",
-  "Universal"];
+  "Universal"
+];
 const PRODUCTS_URL = '/products';
 const SORT_OPTIONS = [
   { value: 'newest', label: 'Yangi qo‘shilgan' },
@@ -41,6 +44,60 @@ const SORT_OPTIONS = [
   { value: 'name', label: 'Nomi bo‘yicha' },
 ];
 const emptySize = () => ({ size: '', price: '', boxes: '', box_kg: '' });
+
+// ---------- Custom Hook: Arrow Key Navigation ----------
+// This hook allows moving focus between inputs using Left/Right arrows
+const useArrowKeyNavigation = (modalOpen) => {
+  useEffect(() => {
+    if (!modalOpen) return;
+
+    const handleKeyDown = (e) => {
+      // Only trigger on Left/Right arrows
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+
+      // Ignore if modifier keys are pressed (e.g., Alt+Left for browser back)
+      if (e.altKey || e.ctrlKey || e.metaKey) return;
+
+      const activeElement = document.activeElement;
+
+      // Check if the active element is an input within our modal
+      // We assume inputs in the modal have a specific data attribute or class, 
+      // or we just check if they are inside the modal container.
+      // Here we check if it's an input/textarea/select
+      if (!activeElement || !['INPUT', 'TEXTAREA', 'SELECT'].includes(activeElement.tagName)) {
+        return;
+      }
+
+      // Find all focusable elements in the form/modal
+      // We look for inputs specifically to avoid focusing buttons accidentally during data entry
+      const form = activeElement.closest('form');
+      if (!form) return;
+
+      const focusableInputs = Array.from(form.querySelectorAll('input, select, textarea'));
+      const currentIndex = focusableInputs.indexOf(activeElement);
+
+      if (currentIndex === -1) return;
+
+      let nextIndex;
+      if (e.key === 'ArrowRight') {
+        nextIndex = currentIndex + 1;
+      } else {
+        nextIndex = currentIndex - 1;
+      }
+
+      // Wrap around or stop at edges? Let's stop at edges for better UX in forms
+      if (nextIndex >= 0 && nextIndex < focusableInputs.length) {
+        e.preventDefault(); // Prevent cursor movement inside text if desired, or just move focus
+        focusableInputs[nextIndex].focus();
+        // Optional: Select all text in the new input for quick replacement
+        // focusableInputs[nextIndex].select(); 
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [modalOpen]);
+};
 
 // ---------- Toast ----------
 const Toast = ({ toast, onClose }) => {
@@ -76,7 +133,7 @@ const ConfirmDialog = ({ open, title, message, confirmLabel = 'Tasdiqlash', dang
         <div className="flex justify-end gap-3">
           <button
             onClick={onCancel}
-            className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:"
+            className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
           >
             Bekor qilish
           </button>
@@ -140,6 +197,9 @@ export const Product = () => {
   const [saving, setSaving] = useState(false);
   const [formErrors, setFormErrors] = useState({});
   const [form, setForm] = useState({ name: '', category: '', sizes: [emptySize()] });
+
+  // Initialize arrow key navigation when modal opens
+  useArrowKeyNavigation(modalOpen);
 
   // ---------- Confirm & Toast ----------
   const [confirmState, setConfirmState] = useState(null);
@@ -232,28 +292,6 @@ export const Product = () => {
       name: product.name,
       category: product.category,
       sizes: product.sizes.map((s) => ({
-        _id: s._id,
-        size: s.size,
-        price: s.price,
-        boxes: s.boxes,
-        box_kg: s.box_kg,
-      })),
-    });
-    setFormErrors({});
-    setModalOpen(true);
-  };
-
-  const openEditWithSizeRemoved = (product, sizeToRemove) => {
-    if (product.sizes.length <= 1) {
-      showToast('Mahsulotda kamida bitta o‘lcham qolishi kerak.', 'error');
-      return;
-    }
-    const updatedSizes = product.sizes.filter((s) => s._id !== sizeToRemove._id);
-    setEditingProduct(product);
-    setForm({
-      name: product.name,
-      category: product.category,
-      sizes: updatedSizes.map((s) => ({
         _id: s._id,
         size: s.size,
         price: s.price,
@@ -437,10 +475,11 @@ export const Product = () => {
     const product = selectedProduct;
     const totalKg = product.sizes.reduce((acc, s) => acc + (s.total || 0), 0);
     const totalPrice = product.sizes.reduce((acc, s) => acc + (s.total || 0) * s.price, 0);
+    const totalBoxes = product.sizes.reduce((acc, s) => acc + (Number(s.boxes) || 0), 0);
     const isDeleted = product.isDeleted;
 
     return (
-      <div className="min-h-screen  py-6 px-4 sm:px-6">
+      <div className="min-h-screen py-6 px-4 sm:px-6">
         <div className="mx-auto animate-in slide-in-from-left-4 duration-300">
           <button
             onClick={goToList}
@@ -495,16 +534,11 @@ export const Product = () => {
             </div>
 
             {/* Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 p-6  border-b border-gray-200">
-              <StatCard icon={Box} label="Jami (kg)" value={`${totalKg.toLocaleString()} kg`} />
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 p-6 border-b border-gray-200">
+              <StatCard icon={Box} label="Jami vazn (kg)" value={`${totalKg.toLocaleString()} kg`} />
+              <StatCard icon={Layers} label="Jami qutilar" value={`${totalBoxes.toLocaleString()} ta`} />
               <StatCard icon={DollarSign} label="Umumiy narx" value={`${totalPrice.toLocaleString()} $`} />
               <StatCard icon={Ruler} label="O‘lchamlar soni" value={product.sizes.length} />
-              <StatCard
-                icon={Package}
-                label="Holati"
-                value={isDeleted ? 'O‘chirilgan' : 'Faol'}
-                className={isDeleted ? 'opacity-60' : ''}
-              />
             </div>
 
             {/* Sizes table with "Umumiy narx" (total price per size) */}
@@ -514,7 +548,7 @@ export const Product = () => {
               </h3>
               <div className="overflow-x-auto rounded-xl border border-gray-200">
                 <table className="w-full text-sm">
-                  <thead className=" border-b border-gray-200">
+                  <thead className="border-b border-gray-200">
                     <tr>
                       <th className="px-4 py-3 text-left font-medium text-gray-600">O‘lcham (kg)</th>
                       <th className="px-4 py-3 text-left font-medium text-gray-600">Narx (kg / $)</th>
@@ -528,7 +562,7 @@ export const Product = () => {
                     {product.sizes.map((size) => {
                       const subtotal = (size.total || 0) * size.price;
                       return (
-                        <tr key={size._id} className="hover: transition">
+                        <tr key={size._id} className="hover:bg-gray-50 transition">
                           <td className="px-4 py-3 font-medium text-gray-800">{size.size}</td>
                           <td className="px-4 py-3 text-gray-600">{size.price}</td>
                           <td className="px-4 py-3 text-gray-600">{size.boxes}</td>
@@ -542,7 +576,7 @@ export const Product = () => {
                         </tr>
                       );
                     })}
-                    <tr className=" font-semibold border-t-2 border-gray-200">
+                    <tr className="font-semibold border-t-2 border-gray-200 bg-gray-50">
                       <td colSpan="4" className="px-4 py-3 text-right text-gray-700">Jami:</td>
                       <td className="px-4 py-3 text-right text-gray-900">{totalKg.toLocaleString()} kg</td>
                       <td className="px-4 py-3 text-right text-emerald-700">{totalPrice.toLocaleString()} $</td>
@@ -552,7 +586,7 @@ export const Product = () => {
               </div>
             </div>
 
-            <div className="px-6 py-4 border-t border-gray-200 /50 text-xs text-gray-400 flex flex-wrap justify-between gap-2">
+            <div className="px-6 py-4 border-t border-gray-200 text-xs text-gray-400 flex flex-wrap justify-between gap-2">
               <span>ID: {product._id}</span>
               <span>Version: {product.version || 0}</span>
               <span>Yangilangan: {new Date(product.updatedAt).toLocaleString('uz-UZ')}</span>
@@ -567,7 +601,7 @@ export const Product = () => {
   // RENDER: LIST VIEW
   // ============================================================
   return (
-    <div className="min-h-screen  font-sans">
+    <div className="min-h-screen font-sans">
       <div className="mx-auto px-4 sm:px-6 py-6">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
@@ -678,7 +712,7 @@ export const Product = () => {
                     products.map((product) => (
                       <tr
                         key={product._id}
-                        className={`border-b border-gray-100 last:border-b-0 hover: transition align-top ${product.isDeleted ? 'opacity-50' : ''}`}
+                        className={`border-b border-gray-100 last:border-b-0 hover:bg-gray-50 transition align-top ${product.isDeleted ? 'opacity-50' : ''}`}
                       >
                         <td
                           className="px-4 py-4 cursor-pointer"
@@ -766,14 +800,14 @@ export const Product = () => {
                 <button
                   onClick={() => goToPage(page - 1)}
                   disabled={page <= 1}
-                  className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed hover:"
+                  className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50"
                 >
                   <ChevronLeft size={18} />
                 </button>
                 <button
                   onClick={() => goToPage(page + 1)}
                   disabled={page >= totalPages}
-                  className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed hover:"
+                  className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-gray-50"
                 >
                   <ChevronRight size={18} />
                 </button>
@@ -857,7 +891,7 @@ export const Product = () => {
                     {form.sizes.map((size, idx) => (
                       <div
                         key={size._id || idx}
-                        className="flex flex-wrap items-start gap-3 p-3  rounded-lg border border-gray-200"
+                        className="flex flex-wrap items-start gap-3 p-3 rounded-lg border border-gray-200"
                       >
                         <div className="flex-1 min-w-[70px]">
                           <label className="block text-xs text-gray-500 mb-0.5">Razmer</label>
@@ -926,7 +960,7 @@ export const Product = () => {
                     type="button"
                     onClick={closeModal}
                     disabled={saving}
-                    className="px-5 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover: transition text-sm font-medium disabled:opacity-50"
+                    className="px-5 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition text-sm font-medium disabled:opacity-50"
                   >
                     Bekor qilish
                   </button>
