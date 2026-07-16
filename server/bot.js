@@ -1,6 +1,7 @@
 import { Telegraf, Markup } from 'telegraf';
 import mongoose from 'mongoose';
 import dayjs from 'dayjs';
+import https from 'https';
 import {
     buildProductsExcel,
     buildOrdersExcel,
@@ -13,6 +14,15 @@ import {
     buildDebtorsPdf,
     buildKassaPdf,
 } from './utils/reportpdf.js';
+
+// Telegram API'ga (ayniqsa katta fayl yuborishda) barqarorroq ulanish uchun
+// maxsus HTTPS agent: ulanishni saqlab turadi (keepAlive) va uzunroq kutadi.
+const telegramAgent = new https.Agent({
+    keepAlive: true,
+    keepAliveMsecs: 10000,
+    maxSockets: 50,
+    timeout: 120000, // 120s — katta fayl yuklash uchun yetarli vaqt
+});
 
 const MONTH_NAMES_UZ = [
     'Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
@@ -62,26 +72,69 @@ function exportKeyboard(prefix, extra = '') {
 // Hisobot yaratish + yuborishni xavfsiz bajaruvchi wrapper
 // (xato yuz bersa foydalanuvchiga ham, Render logiga ham to'liq ma'lumot beradi)
 // ---------------------------------------------------------------------------
+function isTransientNetworkError(err) {
+    const msg = String(err?.message || '');
+    return (
+        msg.includes('socket hang up') ||
+        msg.includes('ECONNRESET') ||
+        msg.includes('ETIMEDOUT') ||
+        msg.includes('ECONNREFUSED') ||
+        msg.includes('EAI_AGAIN') ||
+        msg.includes('network')
+    );
+}
+
+async function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+}
+
 async function sendReport(ctx, { buildFn, args = [], filename }) {
     const startedAt = Date.now();
+    let buffer;
+
     try {
         console.log(`[Report] Boshlandi: ${filename}`);
-        const buffer = await buildFn(...args);
+        buffer = await buildFn(...args);
 
         if (!buffer || buffer.length === 0) {
             throw new Error('Hisobot bo\'sh buffer qaytardi (0 bayt)');
         }
 
         console.log(`[Report] Tayyor: ${filename} (${(buffer.length / 1024).toFixed(1)} KB, ${Date.now() - startedAt}ms)`);
-
-        await ctx.replyWithDocument({ source: buffer, filename });
     } catch (err) {
-        console.error(`[Report] XATOLIK (${filename}):`, err);
+        console.error(`[Report] Yaratishda XATOLIK (${filename}):`, err);
         await ctx.reply(
-            `❌ Hisobotni tayyorlashda xatolik yuz berdi.\n` +
-            `Sabab: ${err.message || 'Noma\'lum xatolik'}\n\n` +
-            `Iltimos, qayta urinib ko'ring yoki administratorga xabar bering.`
+            `❌ Hisobotni tayyorlashda xatolik yuz berdi.\nSabab: ${err.message || 'Noma\'lum xatolik'}`
         ).catch(() => { });
+        return;
+    }
+
+    // Yuborishda ("socket hang up" kabi) vaqtinchalik tarmoq xatolari uchun
+    // 3 martagacha qayta urinamiz (kutish vaqti oshib boradi: 1s, 3s, 6s).
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            await ctx.replyWithDocument({ source: buffer, filename });
+            console.log(`[Report] Yuborildi: ${filename} (${attempt}-urinish)`);
+            return;
+        } catch (err) {
+            const transient = isTransientNetworkError(err);
+            console.error(
+                `[Report] Yuborishda XATOLIK (${filename}), urinish ${attempt}/${maxAttempts}, transient=${transient}:`,
+                err
+            );
+
+            if (!transient || attempt === maxAttempts) {
+                await ctx.reply(
+                    `❌ Faylni yuborishda xatolik yuz berdi (${attempt}-urinishdan keyin).\n` +
+                    `Sabab: ${err.message || 'Noma\'lum xatolik'}\n\n` +
+                    `Iltimos, qayta urinib ko'ring yoki administratorga xabar bering.`
+                ).catch(() => { });
+                return;
+            }
+
+            await sleep(attempt * 3000);
+        }
     }
 }
 
@@ -104,7 +157,14 @@ export async function startBot() {
     const Kassa = mongoose.model('Kassa');
     const KassaTransaction = mongoose.model('KassaTransaction');
 
-    const bot = new Telegraf(token);
+    const bot = new Telegraf(token, {
+        telegram: {
+            agent: telegramAgent,
+            // sendDocument kabi og'ir so'rovlar uchun standart timeout'ni kengaytiramiz
+            webhookReply: false,
+        },
+        handlerTimeout: 180000, // 3 daqiya — hisobot tayyorlash + yuborish uchun
+    });
 
     // ---- /start: admin allaqachon bog'langanmi tekshiramiz ----
     bot.start(async (ctx) => {
@@ -413,4 +473,4 @@ export async function startBot() {
     process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
     return bot;
-}
+}   
