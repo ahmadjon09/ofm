@@ -21,7 +21,9 @@ import morgan from 'morgan';
 import 'express-async-errors';
 import { v4 as uuidv4 } from 'uuid';
 import validator from 'validator';
-import { startBot } from './bot.js';
+import ExcelJS from 'exceljs';
+import PDFDocument from 'pdfkit';
+// import { startBot } from './bot.js';
 
 // ============================================================================
 // SECTION: ENVIRONMENT VALIDATION
@@ -1357,6 +1359,765 @@ const dashboardController = {
     },
 };
 
+// ============================================================================
+// SECTION: REPORTS — Oylik hisobotlar (Excel & PDF)
+// (future: utils/reportHelpers.js, controllers/reportController.js)
+// Bot orqali emas — to'g'ridan-to'g'ri API endpoint orqali ishlaydi:
+//   GET /api/v1/reports/orders?month=iyul&year=2026&format=excel
+//   GET /api/v1/reports/stock?format=pdf
+//   GET /api/v1/reports/debts?format=excel
+//   GET /api/v1/reports/summary?month=7&year=2026&format=pdf
+// ============================================================================
+
+const REPORT_COLORS = {
+    headerBg: '1F4E78',
+    tableHeaderBg: '2E75B6',
+    stripeBg: 'F2F6FA',
+    danger: 'C0392B',
+};
+
+const UZ_MONTHS = [
+    'yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun',
+    'iyul', 'avgust', 'sentabr', 'oktabr', 'noyabr', 'dekabr',
+];
+
+const STATUS_LABELS_UZ = {
+    pending: 'Kutilmoqda',
+    completed: 'Bajarilgan',
+    cancelled: 'Bekor qilingan',
+};
+
+/**
+ * "iyul", "Iyul", "7", 7 kabi turli formatdagi oy qiymatini
+ * 1-12 oraliqdagi raqamga aylantiradi. Berilmasa — joriy oy olinadi.
+ */
+function resolveMonthYear(query = {}) {
+    const now = new Date();
+    let m;
+
+    if (query.month !== undefined && query.month !== null && String(query.month).trim() !== '') {
+        const raw = String(query.month).trim().toLowerCase();
+        if (/^\d+$/.test(raw)) {
+            m = parseInt(raw, 10);
+        } else {
+            const idx = UZ_MONTHS.findIndex((name) => name === raw);
+            if (idx === -1) {
+                throw new ApiError(400, `Oy nomi tushunarsiz: "${query.month}". Masalan: iyul yoki 7.`);
+            }
+            m = idx + 1;
+        }
+    } else {
+        m = now.getMonth() + 1;
+    }
+
+    if (!Number.isInteger(m) || m < 1 || m > 12) {
+        throw new ApiError(400, "Oy 1 dan 12 gacha (yoki oy nomi) bo'lishi kerak.");
+    }
+
+    let y = now.getFullYear();
+    if (query.year !== undefined && query.year !== null && String(query.year).trim() !== '') {
+        y = parseInt(query.year, 10);
+        if (Number.isNaN(y)) throw new ApiError(400, "Yil noto'g'ri formatda.");
+    }
+
+    const start = new Date(y, m - 1, 1, 0, 0, 0, 0);
+    const end = new Date(y, m, 0, 23, 59, 59, 999);
+    const monthName = UZ_MONTHS[m - 1];
+
+    return { month: m, year: y, monthName, start, end };
+}
+
+function resolveFormat(query = {}) {
+    const format = String(query.format || 'excel').trim().toLowerCase();
+    if (!['excel', 'xlsx', 'pdf'].includes(format)) {
+        throw new ApiError(400, "format 'excel' yoki 'pdf' bo'lishi kerak.");
+    }
+    return format === 'xlsx' ? 'excel' : format;
+}
+
+function formatMoney(n) {
+    return new Intl.NumberFormat('uz-UZ').format(Math.round(n || 0));
+}
+
+function setDownloadHeaders(res, filename, format) {
+    const mime = format === 'pdf'
+        ? 'application/pdf'
+        : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+}
+
+// ---------------------------------------------------------------------------
+// EXCEL: umumiy sarlavha stili (har bir sheet uchun bir xil ko'rinish)
+// ---------------------------------------------------------------------------
+function styleExcelTitle(sheet, title, subtitle, colSpan) {
+    sheet.mergeCells(1, 1, 1, colSpan);
+    const titleCell = sheet.getCell(1, 1);
+    titleCell.value = title;
+    titleCell.font = { size: 15, bold: true, color: { argb: 'FFFFFFFF' } };
+    titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${REPORT_COLORS.headerBg}` } };
+    sheet.getRow(1).height = 26;
+
+    if (subtitle) {
+        sheet.mergeCells(2, 1, 2, colSpan);
+        const subCell = sheet.getCell(2, 1);
+        subCell.value = subtitle;
+        subCell.font = { italic: true, size: 10, color: { argb: 'FF555555' } };
+        sheet.getRow(2).height = 18;
+    }
+}
+
+function styleExcelHeaderRow(row) {
+    row.eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${REPORT_COLORS.tableHeaderBg}` } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.border = { bottom: { style: 'thin', color: { argb: 'FFCCCCCC' } } };
+    });
+}
+
+function stripeExcelRow(row, index) {
+    if (index % 2 === 0) {
+        row.eachCell((cell) => {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${REPORT_COLORS.stripeBg}` } };
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PDF: umumiy jadval chizuvchi yordamchi (pdfkit'da tayyor table yo'q)
+// ---------------------------------------------------------------------------
+function newPdfDoc() {
+    return new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
+}
+
+function pdfHeader(doc, title, subtitle) {
+    doc.rect(0, 0, doc.page.width, 68).fill(`#${REPORT_COLORS.headerBg}`);
+    doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(17)
+        .text(title, 40, 18, { width: doc.page.width - 80 });
+    if (subtitle) {
+        doc.font('Helvetica').fontSize(9)
+            .text(subtitle, 40, 42, { width: doc.page.width - 80 });
+    }
+    doc.fillColor('#000000');
+    doc.y = 86;
+}
+
+/**
+ * columns: [{ key, label, width(0-1 nisbat), align }]
+ * rows: [{ key: value, ... }]
+ */
+function drawPdfTable(doc, { columns, rows }) {
+    const startX = doc.page.margins.left;
+    const tableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    const rowHeight = 20;
+    let y = doc.y;
+
+    function drawHeaderRow() {
+        doc.rect(startX, y, tableWidth, rowHeight).fill(`#${REPORT_COLORS.tableHeaderBg}`);
+        let x = startX;
+        doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#FFFFFF');
+        columns.forEach((col) => {
+            const w = tableWidth * col.width;
+            doc.text(col.label, x + 4, y + 6, { width: w - 8, align: col.align || 'left' });
+            x += w;
+        });
+        doc.fillColor('#000000');
+        y += rowHeight;
+    }
+
+    drawHeaderRow();
+
+    rows.forEach((row, idx) => {
+        if (y + rowHeight > doc.page.height - doc.page.margins.bottom - 20) {
+            doc.addPage();
+            y = doc.page.margins.top;
+            drawHeaderRow();
+        }
+        if (idx % 2 === 0) {
+            doc.rect(startX, y, tableWidth, rowHeight).fill(`#${REPORT_COLORS.stripeBg}`);
+        }
+        doc.fillColor('#000000');
+        let x = startX;
+        doc.font('Helvetica').fontSize(8);
+        columns.forEach((col) => {
+            const w = tableWidth * col.width;
+            const val = row[col.key] === undefined || row[col.key] === null ? '' : String(row[col.key]);
+            doc.text(val, x + 4, y + 6, { width: w - 8, align: col.align || 'left' });
+            x += w;
+        });
+        y += rowHeight;
+    });
+
+    doc.y = y + 14;
+    return y;
+}
+
+function pdfSectionTitle(doc, text) {
+    if (doc.y > doc.page.height - doc.page.margins.bottom - 60) doc.addPage();
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(`#${REPORT_COLORS.headerBg}`)
+        .text(text, doc.page.margins.left, doc.y);
+    doc.fillColor('#000000');
+    doc.moveDown(0.3);
+}
+
+function pdfSummaryLine(doc, text) {
+    doc.font('Helvetica-Oblique').fontSize(9.5).fillColor('#444444')
+        .text(text, doc.page.margins.left, doc.y, { width: doc.page.width - 80 });
+    doc.fillColor('#000000');
+    doc.moveDown(0.6);
+}
+
+function pdfFooter(doc) {
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
+        doc.switchToPage(i);
+        doc.font('Helvetica').fontSize(7.5).fillColor('#999999').text(
+            `Sahifa ${i + 1} / ${range.count}  •  Yaratilgan: ${new Date().toLocaleString('uz-UZ')}`,
+            doc.page.margins.left,
+            doc.page.height - 26,
+            { width: doc.page.width - doc.page.margins.left - doc.page.margins.right, align: 'center' }
+        );
+    }
+    doc.fillColor('#000000');
+}
+
+// ---------------------------------------------------------------------------
+// MA'LUMOT YIG'UVCHI FUNKSIYALAR (data fetchers — barcha hisobotlar uchun umumiy)
+// ---------------------------------------------------------------------------
+
+async function fetchOrdersReportData({ start, end }) {
+    const orders = await Order.find({ createdAt: { $gte: start, $lte: end } })
+        .populate('client', 'name phone')
+        .sort({ createdAt: 1 })
+        .lean();
+
+    const totalOrders = orders.length;
+    const totalRevenue = orders.reduce((s, o) => s + (o.orderTotal || 0), 0);
+    const completed = orders.filter((o) => o.status === 'completed').length;
+    const pending = orders.filter((o) => o.status === 'pending').length;
+    const cancelled = orders.filter((o) => o.status === 'cancelled').length;
+    const totalKg = orders.reduce(
+        (s, o) => s + o.items.reduce((si, it) => si + (it.quantityKg || 0), 0),
+        0
+    );
+
+    return { orders, totalOrders, totalRevenue, completed, pending, cancelled, totalKg };
+}
+
+async function fetchStockReportData() {
+    const products = await Product.find({}).sort({ category: 1, name: 1 }).lean({ virtuals: true });
+    let totalKg = 0;
+    let totalValue = 0;
+    const rows = [];
+
+    products.forEach((p) => {
+        (p.sizes || []).forEach((s) => {
+            const value = (s.total || 0) * (s.price || 0);
+            totalKg += s.total || 0;
+            totalValue += value;
+            rows.push({
+                product: p.name,
+                category: p.category,
+                size: s.size,
+                boxes: s.boxes,
+                boxKg: s.box_kg,
+                totalKg: s.total,
+                price: s.price,
+                value,
+            });
+        });
+    });
+
+    return { products, rows, totalKg, totalValue };
+}
+
+async function fetchDebtsReportData() {
+    const clients = await Client.find({}).sort({ debt: -1 }).lean({ virtuals: true });
+    const totalDebt = clients.reduce((s, c) => s + (c.debt || 0), 0);
+    const debtors = clients.filter((c) => (c.debt || 0) > 0);
+    return { clients, debtors, totalDebt };
+}
+
+// ---------------------------------------------------------------------------
+// EXCEL GENERATORLARI
+// ---------------------------------------------------------------------------
+
+async function buildOrdersExcel({ month, year, monthName, orders, totalOrders, totalRevenue, completed, pending, cancelled, totalKg }) {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Ombor va Savdo Boshqaruv Tizimi';
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet(`${monthName}_${year}`.slice(0, 31), {
+        views: [{ state: 'frozen', ySplit: 4 }],
+    });
+
+    styleExcelTitle(
+        sheet,
+        `BUYURTMALAR HISOBOTI — ${monthName.toUpperCase()} ${year}`,
+        `Jami buyurtmalar: ${totalOrders}  |  Jami summa: ${formatMoney(totalRevenue)} $  |  Jami: ${totalKg} kg  |  Bajarilgan: ${completed}  |  Kutilmoqda: ${pending}  |  Bekor qilingan: ${cancelled}`,
+        10
+    );
+    sheet.addRow([]);
+
+    const headerRow = sheet.addRow(['№', 'Sana', 'Mijoz', 'Telefon', 'Mahsulot', "O'lcham", 'Miqdor (kg)', 'Narx/kg', 'Summa', 'Status']);
+    styleExcelHeaderRow(headerRow);
+
+    let orderIndex = 0;
+    orders.forEach((order) => {
+        orderIndex += 1;
+        order.items.forEach((item, i) => {
+            const row = sheet.addRow([
+                i === 0 ? orderIndex : '',
+                i === 0 ? new Date(order.createdAt).toLocaleDateString('uz-UZ') : '',
+                i === 0 ? (order.client?.name || '—') : '',
+                i === 0 ? (order.client?.phone || '—') : '',
+                item.productName,
+                item.size,
+                item.quantityKg,
+                formatMoney(item.pricePerKg),
+                formatMoney(item.subtotal),
+                i === 0 ? (STATUS_LABELS_UZ[order.status] || order.status) : '',
+            ]);
+            stripeExcelRow(row, orderIndex);
+        });
+    });
+
+    sheet.addRow([]);
+    const totalRow = sheet.addRow(['', '', '', '', '', '', 'JAMI (kg):', totalKg, `${formatMoney(totalRevenue)} $`, '']);
+    totalRow.font = { bold: true };
+
+    sheet.columns = [
+        { width: 5 }, { width: 12 }, { width: 22 }, { width: 15 },
+        { width: 22 }, { width: 9 }, { width: 12 }, { width: 13 }, { width: 15 }, { width: 14 },
+    ];
+
+    return workbook;
+}
+
+async function buildStockExcel({ rows, totalKg, totalValue }) {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Ombor va Savdo Boshqaruv Tizimi';
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet('Ombordagi qoldiq');
+    styleExcelTitle(
+        sheet,
+        "OMBORDAGI MAHSULOTLAR QOLDIG'I",
+        `Jami og'irlik: ${totalKg} kg  |  Jami qiymat: ${formatMoney(totalValue)} $  |  Sana: ${new Date().toLocaleDateString('uz-UZ')}`,
+        8
+    );
+    sheet.addRow([]);
+
+    const headerRow = sheet.addRow(['№', 'Mahsulot', 'Kategoriya', "O'lcham", 'Karobka soni', 'Karobka (kg)', 'Jami (kg)', 'Qiymat (so\'m)']);
+    styleExcelHeaderRow(headerRow);
+
+    rows.forEach((r, idx) => {
+        const row = sheet.addRow([
+            idx + 1, r.product, r.category, r.size, r.boxes, r.boxKg, r.totalKg, formatMoney(r.value),
+        ]);
+        stripeExcelRow(row, idx + 1);
+    });
+
+    sheet.addRow([]);
+    const totalRow = sheet.addRow(['', '', '', '', '', 'JAMI:', totalKg, formatMoney(totalValue)]);
+    totalRow.font = { bold: true };
+
+    sheet.columns = [
+        { width: 5 }, { width: 24 }, { width: 16 }, { width: 10 }, { width: 14 }, { width: 14 }, { width: 13 }, { width: 16 },
+    ];
+
+    return workbook;
+}
+
+async function buildDebtsExcel({ debtors, totalDebt }) {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Ombor va Savdo Boshqaruv Tizimi';
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet('Mijozlar qarzi');
+    styleExcelTitle(
+        sheet,
+        'MIJOZLARNING QARZDORLIGI',
+        `Qarzdor mijozlar soni: ${debtors.length}  |  Jami qarz: ${formatMoney(totalDebt)} $  |  Sana: ${new Date().toLocaleDateString('uz-UZ')}`,
+        6
+    );
+    sheet.addRow([]);
+
+    const headerRow = sheet.addRow(['№', 'Mijoz', 'Telefon', 'Jami buyurtma', "Jami to'langan", 'Qarz (so\'m)']);
+    styleExcelHeaderRow(headerRow);
+
+    debtors.forEach((c, idx) => {
+        const totalPaid = (c.paymentHistory || []).reduce((s, p) => s + (p.amount || 0), 0);
+        const row = sheet.addRow([
+            idx + 1, c.name, c.phone, (c.orders || []).length, formatMoney(totalPaid), formatMoney(c.debt),
+        ]);
+        stripeExcelRow(row, idx + 1);
+    });
+
+    sheet.addRow([]);
+    const totalRow = sheet.addRow(['', '', '', '', 'JAMI QARZ:', formatMoney(totalDebt)]);
+    totalRow.font = { bold: true, color: { argb: `FF${REPORT_COLORS.danger}` } };
+
+    sheet.columns = [
+        { width: 5 }, { width: 24 }, { width: 16 }, { width: 14 }, { width: 16 }, { width: 16 },
+    ];
+
+    return workbook;
+}
+
+async function buildSummaryExcel({ month, year, monthName, ordersData, stockData, debtsData, kassaBalance }) {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Ombor va Savdo Boshqaruv Tizimi';
+    workbook.created = new Date();
+
+    // --- 1-sheet: umumiy ko'rsatkichlar ---
+    const overview = workbook.addWorksheet('Umumiy');
+    styleExcelTitle(overview, `OYLIK UMUMIY HISOBOT — ${monthName.toUpperCase()} ${year}`, null, 4);
+    overview.addRow([]);
+    const kv = [
+        ['Jami buyurtmalar soni', ordersData.totalOrders],
+        ['Jami savdo summasi', `${formatMoney(ordersData.totalRevenue)} $`],
+        ['Sotilgan (kg)', `${ordersData.totalKg} kg`],
+        ['Bajarilgan buyurtmalar', ordersData.completed],
+        ['Kutilayotgan buyurtmalar', ordersData.pending],
+        ['Bekor qilingan buyurtmalar', ordersData.cancelled],
+        ['Ombordagi jami qoldiq', `${stockData.totalKg} kg`],
+        ['Ombordagi jami qiymat', `${formatMoney(stockData.totalValue)} $`],
+        ["Mijozlarning jami qarzi", `${formatMoney(debtsData.totalDebt)} $`],
+        ['Qarzdor mijozlar soni', debtsData.debtors.length],
+        ['Kassadagi joriy balans', `${formatMoney(kassaBalance)} $`],
+    ];
+    kv.forEach(([label, value], idx) => {
+        const row = overview.addRow([label, value]);
+        row.getCell(1).font = { bold: true };
+        stripeExcelRow(row, idx);
+    });
+    overview.columns = [{ width: 32 }, { width: 26 }];
+
+    // --- 2-sheet: buyurtmalar ---
+    const ordersSheet = workbook.addWorksheet('Buyurtmalar');
+    styleExcelTitle(ordersSheet, `Buyurtmalar — ${monthName} ${year}`, null, 10);
+    ordersSheet.addRow([]);
+    const ordersHeader = ordersSheet.addRow(['№', 'Sana', 'Mijoz', 'Telefon', 'Mahsulot', "O'lcham", 'Miqdor (kg)', 'Narx/kg', 'Summa', 'Status']);
+    styleExcelHeaderRow(ordersHeader);
+    let oi = 0;
+    ordersData.orders.forEach((order) => {
+        oi += 1;
+        order.items.forEach((item, i) => {
+            const row = ordersSheet.addRow([
+                i === 0 ? oi : '',
+                i === 0 ? new Date(order.createdAt).toLocaleDateString('uz-UZ') : '',
+                i === 0 ? (order.client?.name || '—') : '',
+                i === 0 ? (order.client?.phone || '—') : '',
+                item.productName, item.size, item.quantityKg,
+                formatMoney(item.pricePerKg), formatMoney(item.subtotal),
+                i === 0 ? (STATUS_LABELS_UZ[order.status] || order.status) : '',
+            ]);
+            stripeExcelRow(row, oi);
+        });
+    });
+    ordersSheet.columns = [
+        { width: 5 }, { width: 12 }, { width: 22 }, { width: 15 },
+        { width: 22 }, { width: 9 }, { width: 12 }, { width: 13 }, { width: 15 }, { width: 14 },
+    ];
+
+    // --- 3-sheet: ombor qoldig'i ---
+    const stockSheet = workbook.addWorksheet('Ombor qoldig`i');
+    styleExcelTitle(stockSheet, "Ombordagi mahsulotlar qoldig'i", `Jami: ${stockData.totalKg} kg  |  ${formatMoney(stockData.totalValue)} $`, 8);
+    stockSheet.addRow([]);
+    const stockHeader = stockSheet.addRow(['№', 'Mahsulot', 'Kategoriya', "O'lcham", 'Karobka soni', 'Karobka (kg)', 'Jami (kg)', 'Qiymat']);
+    styleExcelHeaderRow(stockHeader);
+    stockData.rows.forEach((r, idx) => {
+        const row = stockSheet.addRow([idx + 1, r.product, r.category, r.size, r.boxes, r.boxKg, r.totalKg, formatMoney(r.value)]);
+        stripeExcelRow(row, idx + 1);
+    });
+    stockSheet.columns = [
+        { width: 5 }, { width: 24 }, { width: 16 }, { width: 10 }, { width: 14 }, { width: 14 }, { width: 13 }, { width: 16 },
+    ];
+
+    // --- 4-sheet: mijozlar qarzi ---
+    const debtsSheet = workbook.addWorksheet('Mijozlar qarzi');
+    styleExcelTitle(debtsSheet, "Mijozlarning qarzdorligi", `Jami qarz: ${formatMoney(debtsData.totalDebt)} $`, 5);
+    debtsSheet.addRow([]);
+    const debtsHeader = debtsSheet.addRow(['№', 'Mijoz', 'Telefon', 'Jami buyurtma', 'Qarz (so\'m)']);
+    styleExcelHeaderRow(debtsHeader);
+    debtsData.debtors.forEach((c, idx) => {
+        const row = debtsSheet.addRow([idx + 1, c.name, c.phone, (c.orders || []).length, formatMoney(c.debt)]);
+        stripeExcelRow(row, idx + 1);
+    });
+    debtsSheet.columns = [{ width: 5 }, { width: 24 }, { width: 16 }, { width: 14 }, { width: 16 }];
+
+    return workbook;
+}
+
+// ---------------------------------------------------------------------------
+// PDF GENERATORLARI
+// ---------------------------------------------------------------------------
+
+function buildOrdersPdf({ month, year, monthName, orders, totalOrders, totalRevenue, completed, pending, cancelled, totalKg }) {
+    const doc = newPdfDoc();
+    pdfHeader(doc, `Buyurtmalar hisoboti — ${monthName} ${year}`, `Sahifa yaratilgan sana: ${new Date().toLocaleDateString('uz-UZ')}`);
+    pdfSummaryLine(
+        doc,
+        `Jami buyurtmalar: ${totalOrders}  |  Jami summa: ${formatMoney(totalRevenue)} $  |  Jami: ${totalKg} kg  |  Bajarilgan: ${completed}  |  Kutilmoqda: ${pending}  |  Bekor qilingan: ${cancelled}`
+    );
+
+    const rows = [];
+    let oi = 0;
+    orders.forEach((order) => {
+        oi += 1;
+        order.items.forEach((item, i) => {
+            rows.push({
+                no: i === 0 ? oi : '',
+                date: i === 0 ? new Date(order.createdAt).toLocaleDateString('uz-UZ') : '',
+                client: i === 0 ? (order.client?.name || '—') : '',
+                product: `${item.productName} (${item.size})`,
+                qty: item.quantityKg,
+                price: formatMoney(item.pricePerKg),
+                subtotal: formatMoney(item.subtotal),
+                status: i === 0 ? (STATUS_LABELS_UZ[order.status] || order.status) : '',
+            });
+        });
+    });
+
+    drawPdfTable(doc, {
+        columns: [
+            { key: 'no', label: '№', width: 0.05, align: 'center' },
+            { key: 'date', label: 'Sana', width: 0.11 },
+            { key: 'client', label: 'Mijoz', width: 0.19 },
+            { key: 'product', label: 'Mahsulot', width: 0.22 },
+            { key: 'qty', label: 'Kg', width: 0.09, align: 'right' },
+            { key: 'price', label: 'Narx/kg', width: 0.12, align: 'right' },
+            { key: 'subtotal', label: 'Summa', width: 0.13, align: 'right' },
+            { key: 'status', label: 'Status', width: 0.09 },
+        ],
+        rows,
+    });
+
+    pdfFooter(doc);
+    return doc;
+}
+
+function buildStockPdf({ rows, totalKg, totalValue }) {
+    const doc = newPdfDoc();
+    pdfHeader(doc, "Ombordagi mahsulotlar qoldig'i", `Sana: ${new Date().toLocaleDateString('uz-UZ')}`);
+    pdfSummaryLine(doc, `Jami og'irlik: ${totalKg} kg  |  Jami qiymat: ${formatMoney(totalValue)} $`);
+
+    drawPdfTable(doc, {
+        columns: [
+            { key: 'no', label: '№', width: 0.06, align: 'center' },
+            { key: 'product', label: 'Mahsulot', width: 0.24 },
+            { key: 'category', label: 'Kategoriya', width: 0.16 },
+            { key: 'size', label: "O'lcham", width: 0.1, align: 'center' },
+            { key: 'boxes', label: 'Karobka', width: 0.1, align: 'right' },
+            { key: 'totalKg', label: 'Jami (kg)', width: 0.13, align: 'right' },
+            { key: 'value', label: 'Qiymat', width: 0.21, align: 'right' },
+        ],
+        rows: rows.map((r, idx) => ({
+            no: idx + 1,
+            product: r.product,
+            category: r.category,
+            size: r.size,
+            boxes: r.boxes,
+            totalKg: r.totalKg,
+            value: formatMoney(r.value),
+        })),
+    });
+
+    pdfFooter(doc);
+    return doc;
+}
+
+function buildDebtsPdf({ debtors, totalDebt }) {
+    const doc = newPdfDoc();
+    pdfHeader(doc, 'Mijozlarning qarzdorligi', `Sana: ${new Date().toLocaleDateString('uz-UZ')}`);
+    pdfSummaryLine(doc, `Qarzdor mijozlar soni: ${debtors.length}  |  Jami qarz: ${formatMoney(totalDebt)} $`);
+
+    drawPdfTable(doc, {
+        columns: [
+            { key: 'no', label: '№', width: 0.06, align: 'center' },
+            { key: 'name', label: 'Mijoz', width: 0.3 },
+            { key: 'phone', label: 'Telefon', width: 0.2 },
+            { key: 'orders', label: 'Buyurtma', width: 0.14, align: 'center' },
+            { key: 'debt', label: "Qarz ($)", width: 0.3, align: 'right' },
+        ],
+        rows: debtors.map((c, idx) => ({
+            no: idx + 1,
+            name: c.name,
+            phone: c.phone,
+            orders: (c.orders || []).length,
+            debt: formatMoney(c.debt),
+        })),
+    });
+
+    pdfFooter(doc);
+    return doc;
+}
+
+function buildSummaryPdf({ month, year, monthName, ordersData, stockData, debtsData, kassaBalance }) {
+    const doc = newPdfDoc();
+    pdfHeader(doc, `Oylik umumiy hisobot — ${monthName} ${year}`, `Sana: ${new Date().toLocaleDateString('uz-UZ')}`);
+
+    pdfSectionTitle(doc, "Umumiy ko'rsatkichlar");
+    drawPdfTable(doc, {
+        columns: [
+            { key: 'label', label: "Ko'rsatkich", width: 0.6 },
+            { key: 'value', label: 'Qiymat', width: 0.4, align: 'right' },
+        ],
+        rows: [
+            { label: 'Jami buyurtmalar soni', value: ordersData.totalOrders },
+            { label: 'Jami savdo summasi', value: `${formatMoney(ordersData.totalRevenue)} $` },
+            { label: 'Sotilgan (kg)', value: `${ordersData.totalKg} kg` },
+            { label: 'Bajarilgan / Kutilmoqda / Bekor qilingan', value: `${ordersData.completed} / ${ordersData.pending} / ${ordersData.cancelled}` },
+            { label: 'Ombordagi jami qoldiq', value: `${stockData.totalKg} kg` },
+            { label: 'Ombordagi jami qiymat', value: `${formatMoney(stockData.totalValue)} $` },
+            { label: "Mijozlarning jami qarzi", value: `${formatMoney(debtsData.totalDebt)} $` },
+            { label: 'Qarzdor mijozlar soni', value: debtsData.debtors.length },
+            { label: 'Kassadagi joriy balans', value: `${formatMoney(kassaBalance)} $` },
+        ],
+    });
+
+    doc.addPage();
+    pdfSectionTitle(doc, "Eng ko'p qarzdor mijozlar (TOP-10)");
+    drawPdfTable(doc, {
+        columns: [
+            { key: 'no', label: '№', width: 0.08, align: 'center' },
+            { key: 'name', label: 'Mijoz', width: 0.34 },
+            { key: 'phone', label: 'Telefon', width: 0.24 },
+            { key: 'debt', label: "Qarz ($)", width: 0.34, align: 'right' },
+        ],
+        rows: debtsData.debtors.slice(0, 10).map((c, idx) => ({
+            no: idx + 1, name: c.name, phone: c.phone, debt: formatMoney(c.debt),
+        })),
+    });
+
+    doc.addPage();
+    pdfSectionTitle(doc, "Ombordagi qoldiq (TOP-15, kg bo'yicha)");
+    const topStock = [...stockData.rows].sort((a, b) => b.totalKg - a.totalKg).slice(0, 15);
+    drawPdfTable(doc, {
+        columns: [
+            { key: 'no', label: '№', width: 0.06, align: 'center' },
+            { key: 'product', label: 'Mahsulot', width: 0.28 },
+            { key: 'size', label: "O'lcham", width: 0.12, align: 'center' },
+            { key: 'totalKg', label: 'Jami (kg)', width: 0.22, align: 'right' },
+            { key: 'value', label: 'Qiymat', width: 0.32, align: 'right' },
+        ],
+        rows: topStock.map((r, idx) => ({
+            no: idx + 1, product: r.product, size: r.size, totalKg: r.totalKg, value: formatMoney(r.value),
+        })),
+    });
+
+    pdfFooter(doc);
+    return doc;
+}
+
+// ---------------------------------------------------------------------------
+// CONTROLLER — Reports
+// (future: controllers/reportController.js)
+// ---------------------------------------------------------------------------
+
+const reportController = {
+    /**
+     * GET /api/v1/reports/orders?month=iyul&year=2026&format=excel|pdf
+     * Berilgan oydagi barcha buyurtmalarni Excel yoki PDF qilib qaytaradi.
+     */
+    async orders(req, res) {
+        const format = resolveFormat(req.query);
+        const { month, year, monthName, start, end } = resolveMonthYear(req.query);
+        const data = await fetchOrdersReportData({ start, end });
+
+        const filenameBase = `buyurtmalar_${monthName}_${year}`;
+
+        if (format === 'excel') {
+            const workbook = await buildOrdersExcel({ month, year, monthName, ...data });
+            setDownloadHeaders(res, `${filenameBase}.xlsx`, 'excel');
+            await workbook.xlsx.write(res);
+            return res.end();
+        }
+
+        const doc = buildOrdersPdf({ month, year, monthName, ...data });
+        setDownloadHeaders(res, `${filenameBase}.pdf`, 'pdf');
+        doc.pipe(res);
+        doc.end();
+    },
+
+    /**
+     * GET /api/v1/reports/stock?format=excel|pdf
+     * Ombordagi joriy qoldiqni (qancha mahsulot qolgani) hisobot qilib qaytaradi.
+     */
+    async stock(req, res) {
+        const format = resolveFormat(req.query);
+        const data = await fetchStockReportData();
+        const filenameBase = `ombor_qoldigi_${new Date().toISOString().slice(0, 10)}`;
+
+        if (format === 'excel') {
+            const workbook = await buildStockExcel(data);
+            setDownloadHeaders(res, `${filenameBase}.xlsx`, 'excel');
+            await workbook.xlsx.write(res);
+            return res.end();
+        }
+
+        const doc = buildStockPdf(data);
+        setDownloadHeaders(res, `${filenameBase}.pdf`, 'pdf');
+        doc.pipe(res);
+        doc.end();
+    },
+
+    /**
+     * GET /api/v1/reports/debts?format=excel|pdf
+     * Mijozlarning jami qarzdorligi bo'yicha hisobot.
+     */
+    async debts(req, res) {
+        const format = resolveFormat(req.query);
+        const data = await fetchDebtsReportData();
+        const filenameBase = `mijozlar_qarzi_${new Date().toISOString().slice(0, 10)}`;
+
+        if (format === 'excel') {
+            const workbook = await buildDebtsExcel(data);
+            setDownloadHeaders(res, `${filenameBase}.xlsx`, 'excel');
+            await workbook.xlsx.write(res);
+            return res.end();
+        }
+
+        const doc = buildDebtsPdf(data);
+        setDownloadHeaders(res, `${filenameBase}.pdf`, 'pdf');
+        doc.pipe(res);
+        doc.end();
+    },
+
+    /**
+     * GET /api/v1/reports/summary?month=iyul&year=2026&format=excel|pdf
+     * Bitta faylda: oylik buyurtmalar + ombor qoldig'i + mijozlar qarzi + kassa balansi.
+     */
+    async summary(req, res) {
+        const format = resolveFormat(req.query);
+        const { month, year, monthName, start, end } = resolveMonthYear(req.query);
+
+        const [ordersData, stockData, debtsData, kassa] = await Promise.all([
+            fetchOrdersReportData({ start, end }),
+            fetchStockReportData(),
+            fetchDebtsReportData(),
+            getKassaDoc(),
+        ]);
+
+        const filenameBase = `umumiy_hisobot_${monthName}_${year}`;
+        const payload = { month, year, monthName, ordersData, stockData, debtsData, kassaBalance: kassa.balance };
+
+        if (format === 'excel') {
+            const workbook = await buildSummaryExcel(payload);
+            setDownloadHeaders(res, `${filenameBase}.xlsx`, 'excel');
+            await workbook.xlsx.write(res);
+            return res.end();
+        }
+
+        const doc = buildSummaryPdf(payload);
+        setDownloadHeaders(res, `${filenameBase}.pdf`, 'pdf');
+        doc.pipe(res);
+        doc.end();
+    },
+};
 
 // ============================================================================
 // SECTION: EXPRESS APP SETUP
@@ -1475,6 +2236,12 @@ router.post('/kassa/expense', authenticate, authorize('admin', 'manager'), kassa
 // ---- Dashboard ----
 router.get('/dashboard/stats', authenticate, authorize('admin', 'manager'), dashboardController.stats);
 
+// report
+router.get('/reports/orders', authenticate, authorize('admin', 'manager'), reportController.orders);
+router.get('/reports/stock', authenticate, authorize('admin', 'manager'), reportController.stock);
+router.get('/reports/debts', authenticate, authorize('admin', 'manager'), reportController.debts);
+router.get('/reports/summary', authenticate, authorize('admin', 'manager'), reportController.summary);
+
 app.use('/api/v1', router);
 
 // ============================================================================
@@ -1556,7 +2323,7 @@ async function startServer() {
     // Telegram bot — DB ulanib, modellar ro'yxatdan o'tgandan keyin ishga tushadi.
     // BOT_TOKEN .env faylida bo'lmasa, bot shunchaki ishga tushmaydi (server ishlashda davom etadi).
     try {
-        await startBot();
+        // await startBot();
     } catch (err) {
         console.error(`${colors.red}[Bot] Ishga tushirishda xatolik: ${err.message}${colors.reset}`);
     }

@@ -1,8 +1,9 @@
 import axios from 'axios'
 import Cookies from 'js-cookie'
 
-const BASE_URL = `https://ofm-r37o.onrender.com/api/v1`
-localStorage.setItem('base_url', BASE_URL)
+// const BASE_URL = `https://ofm-r37o.onrender.com/api/v1`
+export const BASE_URL = `http://localhost:5000/api/v1`
+
 const token = Cookies.get('user_token')
 const instance = axios.create({
   baseURL: BASE_URL,
