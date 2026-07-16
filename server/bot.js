@@ -3,6 +3,11 @@ import mongoose from 'mongoose';
 import dayjs from 'dayjs';
 import https from 'https';
 import dns from 'dns';
+import fs from 'fs/promises';
+import { createReadStream } from 'fs';
+import os from 'os';
+import path from 'path';
+import { randomUUID } from 'crypto';
 
 // Render (va boshqa ko'p konteyner-hostinglar)da chiquvchi ulanishlar
 // ba'zan IPv6'ni afzal ko'radi, lekin IPv6 egress to'liq ishlamay,
@@ -98,9 +103,17 @@ async function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }
 
+// Vaqtinchalik fayllar uchun alohida papka (Render'da /tmp yozish uchun ochiq).
+const TMP_DIR = path.join(os.tmpdir(), 'reports');
+
+async function ensureTmpDir() {
+    await fs.mkdir(TMP_DIR, { recursive: true });
+}
+
 async function sendReport(ctx, { buildFn, args = [], filename }) {
     const startedAt = Date.now();
     let buffer;
+    let tmpFilePath;
 
     // Callback tugmasining "toast" xabari tez yo'qolib ketadi va uzoq
     // hisobotlarda foydalanuvchi hech narsa bo'layotganini bilmay qoladi —
@@ -110,6 +123,9 @@ async function sendReport(ctx, { buildFn, args = [], filename }) {
         statusMsg = await ctx.reply('⏳ Hisobot tayyorlanmoqda, biroz kuting...');
     } catch (_) { /* status xabari yuborilmasa ham asosiy jarayon davom etadi */ }
 
+    // ---- 1) Hisobotni xotirada yaratib, DARHOL diskka yozamiz ----
+    // (xotirada uzoq ushlab turmaslik uchun; yirik hisobotlarda ham
+    // process xotirasi kamroq bosim ostida qoladi)
     try {
         console.log(`[Report] Boshlandi: ${filename}`);
         buffer = await buildFn(...args);
@@ -118,15 +134,23 @@ async function sendReport(ctx, { buildFn, args = [], filename }) {
             throw new Error('Hisobot bo\'sh buffer qaytardi (0 bayt)');
         }
 
-        console.log(`[Report] Tayyor: ${filename} (${(buffer.length / 1024).toFixed(1)} KB, ${Date.now() - startedAt}ms)`);
+        await ensureTmpDir();
+        tmpFilePath = path.join(TMP_DIR, `${randomUUID()}-${filename}`);
+        await fs.writeFile(tmpFilePath, buffer);
+        buffer = null; // xotiradan bo'shatamiz, endi fayl diskda
+
+        console.log(`[Report] Diskka yozildi: ${tmpFilePath} (${Date.now() - startedAt}ms)`);
     } catch (err) {
         console.error(`[Report] Yaratishda XATOLIK (${filename}):`, err);
+        const failText = `❌ Hisobotni tayyorlashda xatolik yuz berdi.\nSabab: ${err.message || 'Noma\'lum xatolik'}`;
         if (statusMsg) {
             await ctx.telegram
-                .editMessageText(ctx.chat.id, statusMsg.message_id, undefined,
-                    `❌ Hisobotni tayyorlashda xatolik yuz berdi.\nSabab: ${err.message || 'Noma\'lum xatolik'}`)
-                .catch(() => ctx.reply(`❌ Hisobotni tayyorlashda xatolik yuz berdi.\nSabab: ${err.message || 'Noma\'lum xatolik'}`).catch(() => { }));
+                .editMessageText(ctx.chat.id, statusMsg.message_id, undefined, failText)
+                .catch(() => ctx.reply(failText).catch(() => { }));
+        } else {
+            await ctx.reply(failText).catch(() => { });
         }
+        if (tmpFilePath) await fs.unlink(tmpFilePath).catch(() => { });
         return;
     }
 
@@ -136,47 +160,78 @@ async function sendReport(ctx, { buildFn, args = [], filename }) {
             .catch(() => { });
     }
 
-    // Yuborishda ("socket hang up" kabi) vaqtinchalik tarmoq xatolari uchun
-    // 3 martagacha qayta urinamiz (kutish vaqti oshib boradi: 1s, 3s, 6s).
+    // ---- 2) Diskdagi faylni stream sifatida yuboramiz ----
+    // Xato bo'lsa yoki muvaffaqiyatli bo'lsa ham, oxirida faylni albatta o'chiramiz.
     const maxAttempts = 3;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-            await ctx.replyWithDocument({ source: buffer, filename });
-            console.log(`[Report] Yuborildi: ${filename} (${attempt}-urinish)`);
-            if (statusMsg) {
-                await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => { });
-            }
-            return;
-        } catch (err) {
-            const transient = isTransientNetworkError(err);
-            console.error(
-                `[Report] Yuborishda XATOLIK (${filename}), urinish ${attempt}/${maxAttempts}, transient=${transient}:`,
-                err
-            );
-
-            if (statusMsg) {
-                await ctx.telegram
-                    .editMessageText(ctx.chat.id, statusMsg.message_id, undefined,
-                        `📤 Fayl yuborilmoqda... (qayta urinish ${attempt}/${maxAttempts})`)
-                    .catch(() => { });
-            }
-
-            if (!transient || attempt === maxAttempts) {
-                const failText =
-                    `❌ Faylni yuborishda xatolik yuz berdi (${attempt}-urinishdan keyin).\n` +
-                    `Sabab: ${err.message || 'Noma\'lum xatolik'}\n\n` +
-                    `Iltimos, qayta urinib ko'ring yoki administratorga xabar bering.`;
+    try {
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                await ctx.replyWithDocument({ source: createReadStream(tmpFilePath), filename });
+                console.log(`[Report] Yuborildi: ${filename} (${attempt}-urinish)`);
                 if (statusMsg) {
-                    await ctx.telegram
-                        .editMessageText(ctx.chat.id, statusMsg.message_id, undefined, failText)
-                        .catch(() => ctx.reply(failText).catch(() => { }));
-                } else {
-                    await ctx.reply(failText).catch(() => { });
+                    await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => { });
                 }
                 return;
+            } catch (err) {
+                const transient = isTransientNetworkError(err);
+                console.error(
+                    `[Report] Yuborishda XATOLIK (${filename}), urinish ${attempt}/${maxAttempts}, transient=${transient}:`,
+                    err
+                );
+
+                if (statusMsg) {
+                    await ctx.telegram
+                        .editMessageText(ctx.chat.id, statusMsg.message_id, undefined,
+                            `📤 Fayl yuborilmoqda... (qayta urinish ${attempt}/${maxAttempts})`)
+                        .catch(() => { });
+                }
+
+                if (!transient || attempt === maxAttempts) {
+                    const failText =
+                        `❌ Faylni yuborishda xatolik yuz berdi (${attempt}-urinishdan keyin).\n` +
+                        `Sabab: ${err.message || 'Noma\'lum xatolik'}\n\n` +
+                        `Iltimos, qayta urinib ko'ring yoki administratorga xabar bering.`;
+                    if (statusMsg) {
+                        await ctx.telegram
+                            .editMessageText(ctx.chat.id, statusMsg.message_id, undefined, failText)
+                            .catch(() => ctx.reply(failText).catch(() => { }));
+                    } else {
+                        await ctx.reply(failText).catch(() => { });
+                    }
+                    return;
+                }
+
+                await sleep(attempt * 3000);
+            }
+        }
+    } finally {
+        // Muvaffaqiyat, xato, yoki qayta urinishlardan qat'i nazar —
+        // vaqtinchalik fayl diskda qolib ketmasligi kerak.
+        await fs.unlink(tmpFilePath).catch(() => { });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Botni ishga tushirishda 409 Conflict (eski instance hali to'liq
+// o'chmagan bo'lsa) yuz bersa, bir necha marta kutib qayta urinamiz.
+// Render'da zero-downtime deploy paytida bu normal, o'tkinchi holat.
+// ---------------------------------------------------------------------------
+async function launchWithRetry(bot, maxAttempts = 8) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            await bot.launch({ dropPendingUpdates: true });
+            return;
+        } catch (err) {
+            const is409 = err?.response?.error_code === 409 || String(err?.message || '').includes('409');
+            console.error(`[Bot] Ishga tushirish urinishi ${attempt}/${maxAttempts} muvaffaqiyatsiz:`, err?.message || err);
+
+            if (!is409 || attempt === maxAttempts) {
+                throw err;
             }
 
-            await sleep(attempt * 3000);
+            const waitMs = Math.min(5000 * attempt, 30000); // 5s, 10s, 15s... 30s'gacha
+            console.log(`[Bot] Eski instance hali faol bo'lishi mumkin, ${waitMs / 1000}s kutib qayta urinamiz...`);
+            await sleep(waitMs);
         }
     }
 }
@@ -208,6 +263,20 @@ export async function startBot() {
         },
         handlerTimeout: 180000, // 3 daqiya — hisobot tayyorlash + yuborish uchun
     });
+
+    // Oldingi ishga tushishlardan qolib ketgan vaqtinchalik hisobot
+    // fayllari bo'lsa (masalan process kutilmaganda qulab tushgan bo'lsa),
+    // diskni bekorga to'ldirmasligi uchun tozalab tashlaymiz.
+    try {
+        await ensureTmpDir();
+        const leftovers = await fs.readdir(TMP_DIR);
+        await Promise.all(leftovers.map((f) => fs.unlink(path.join(TMP_DIR, f)).catch(() => { })));
+        if (leftovers.length) {
+            console.log(`[Bot] ${leftovers.length} ta eski vaqtinchalik fayl tozalandi.`);
+        }
+    } catch (err) {
+        console.error('[Bot] Vaqtinchalik papkani tozalashda xatolik:', err);
+    }
 
     // ---- /start: admin allaqachon bog'langanmi tekshiramiz ----
     bot.start(async (ctx) => {
@@ -500,7 +569,10 @@ export async function startBot() {
 
     // Render qayta deploy/restart qilganda eski instance bilan
     // "409 Conflict" bo'lmasligi uchun eski pending update'larni tashlab yuboramiz.
-    await bot.launch({ dropPendingUpdates: true });
+    // Deploy paytida bir necha soniya eski va yangi instance parallel turishi
+    // mumkin (Render'ning zero-downtime deploy xususiyati) — shu daqiqada
+    // getUpdates 409 qaytarishi normal holat, shuning uchun qayta urinamiz.
+    await launchWithRetry(bot);
     console.log('[Bot] Telegram bot ishga tushdi ✅');
 
     // Xotira yoki kutilmagan xatoliklar sabab process jimgina o'lib qolmasligi

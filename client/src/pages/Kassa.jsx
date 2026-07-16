@@ -115,7 +115,7 @@ const StatCard = ({ icon: Icon, label, value, color = 'blue' }) => {
 export const Kassa = () => {
     // ---------- State ----------
     const [page, setPage] = useState(1);
-    const limit = 10;
+    const limit = 50;
     const [typeFilter, setTypeFilter] = useState('');
     const [fromDate, setFromDate] = useState('');
     const [toDate, setToDate] = useState('');
