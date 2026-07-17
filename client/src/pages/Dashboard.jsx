@@ -176,8 +176,8 @@ const ExportModal = ({ isOpen, onClose }) => {
                                     key={item.id}
                                     onClick={() => setFormData({ ...formData, type: item.id })}
                                     className={`flex items-center justify-center gap-2 p-3 rounded-lg border text-sm font-medium transition ${formData.type === item.id
-                                            ? 'border-blue-500 bg-blue-50 text-blue-700 ring-1 ring-blue-500'
-                                            : 'border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300'
+                                        ? 'border-blue-500 bg-blue-50 text-blue-700 ring-1 ring-blue-500'
+                                        : 'border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300'
                                         }`}
                                 >
                                     <item.icon size={16} />
@@ -224,8 +224,8 @@ const ExportModal = ({ isOpen, onClose }) => {
                             <button
                                 onClick={() => setFormData({ ...formData, format: 'excel' })}
                                 className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-lg border transition ${formData.format === 'excel'
-                                        ? 'border-green-500 bg-green-50 text-green-700 ring-1 ring-green-500'
-                                        : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                                    ? 'border-green-500 bg-green-50 text-green-700 ring-1 ring-green-500'
+                                    : 'border-gray-200 text-gray-600 hover:bg-gray-50'
                                     }`}
                             >
                                 <FileSpreadsheet size={18} />
@@ -234,8 +234,8 @@ const ExportModal = ({ isOpen, onClose }) => {
                             <button
                                 onClick={() => setFormData({ ...formData, format: 'pdf' })}
                                 className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-lg border transition ${formData.format === 'pdf'
-                                        ? 'border-red-500 bg-red-50 text-red-700 ring-1 ring-red-500'
-                                        : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                                    ? 'border-red-500 bg-red-50 text-red-700 ring-1 ring-red-500'
+                                    : 'border-gray-200 text-gray-600 hover:bg-gray-50'
                                     }`}
                             >
                                 <Printer size={18} />
@@ -297,6 +297,7 @@ export const Dashboard = () => {
         totalOrders = 0,
         todaysOrders = 0,
         monthlyOrders = 0,
+        warehouseValue = 0,
         revenue = 0,
         totalDebt = 0,
         totalKg = 0,
@@ -422,6 +423,13 @@ export const Dashboard = () => {
                         value={monthlyOrders}
                         color="green"
                         growth={growth?.ordersPercent}
+                    />
+                    <StatCard
+                        icon={DollarSign}
+                        label="Jami maxsulot narxi"
+                        value={`${warehouseValue.toLocaleString()} $`}
+                        color="green"
+                    // growth={growth?.ordersPercent}
                     />
                 </div>
 
@@ -609,10 +617,10 @@ export const Dashboard = () => {
                                                 </td>
                                                 <td className="px-4 py-3">
                                                     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${order.status === 'completed'
-                                                            ? 'bg-green-100 text-green-700'
-                                                            : order.status === 'cancelled'
-                                                                ? 'bg-red-100 text-red-700'
-                                                                : 'bg-yellow-100 text-yellow-700'
+                                                        ? 'bg-green-100 text-green-700'
+                                                        : order.status === 'cancelled'
+                                                            ? 'bg-red-100 text-red-700'
+                                                            : 'bg-yellow-100 text-yellow-700'
                                                         }`}>
                                                         {order.status === 'pending' ? 'Kutilmoqda' : order.status === 'completed' ? 'Bajarilgan' : 'Bekor'}
                                                     </span>

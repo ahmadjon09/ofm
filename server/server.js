@@ -362,7 +362,7 @@ const Product = mongoose.model('Product', productSchema);
 
 const paymentHistorySchema = new mongoose.Schema(
     {
-        amount: { type: Number, required: true, min: 0 },
+        amount: { type: Number, required: true },
         date: { type: Date, default: Date.now },
         note: { type: String, default: '' },
         user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
@@ -1165,8 +1165,25 @@ const dashboardController = {
             Client.aggregate([{ $group: { _id: null, total: { $sum: '$debt' } } }]),
 
             Product.aggregate([
-                { $unwind: '$sizes' },
-                { $group: { _id: null, totalKg: { $sum: '$sizes.total' } } },
+                { $unwind: "$sizes" },
+                {
+                    $group: {
+                        _id: null,
+                        warehouseValue: {
+                            $sum: {
+                                $multiply: [
+                                    { $ifNull: ["$sizes.total", 0] },
+                                    { $ifNull: ["$sizes.price", 0] }
+                                ]
+                            }
+                        },
+                        warehouseKg: {
+                            $sum: {
+                                $ifNull: ["$sizes.total", 0]
+                            }
+                        }
+                    }
+                }
             ]),
 
             Order.aggregate([
@@ -1315,18 +1332,25 @@ const dashboardController = {
             ? Number((((monthlyOrders - lastMonthOrders) / lastMonthOrders) * 100).toFixed(1))
             : (monthlyOrders > 0 ? 100 : 0);
 
+        // FIX: warehouseValue va warehouseKg totalKgAgg massividan ajratib olinmagan edi
+        const warehouseValue = totalKgAgg[0]?.warehouseValue || 0;
+        const warehouseKg = totalKgAgg[0]?.warehouseKg || 0;
+
         return sendSuccess(res, 200, "Statistika ma'lumotlari.", {
-            // Umumiy kartochkalar
             totalProducts,
             totalClients,
             totalOrders,
             todaysOrders,
             monthlyOrders,
-            revenue: currentRevenue,
-            totalDebt: debtAgg[0]?.total || 0,
-            totalKg: totalKgAgg[0]?.totalKg || 0,
 
-            // O'sish ko'rsatkichlari (bu oy vs o'tgan oy)
+            revenue: currentRevenue,
+
+            totalDebt: debtAgg[0]?.total || 0,
+
+            totalKg: warehouseKg,
+
+            warehouseValue: warehouseValue,
+
             growth: {
                 revenuePercent: revenueGrowthPercent,
                 ordersPercent: ordersGrowthPercent,
@@ -1334,20 +1358,19 @@ const dashboardController = {
                 lastMonthOrders,
             },
 
-            // Ro'yxatlar
-            topProducts: topProductsChart,       // BarChart uchun: dataKey="quantityKg" / "revenue"
+            topProducts: topProductsChart,
             latestOrders,
 
-            // Grafiklar uchun tayyor massivlar
             charts: {
-                monthlyRevenueTrend,   // LineChart/BarChart: xKey="month", lines: revenue, ordersCount
-                dailyRevenueTrend,     // LineChart: xKey="date", line: revenue
-                orderStatusChart,      // PieChart/Donut: dataKey="count", nameKey="label"
-                topClientsByDebt: topClients, // BarChart: xKey="name", dataKey="debt"
+                monthlyRevenueTrend,
+                dailyRevenueTrend,
+                orderStatusChart,
+                topClientsByDebt: topClients,
             },
         });
     },
 };
+
 
 // ============================================================================
 // SECTION: REPORTS — Oylik hisobotlar (Excel & PDF)

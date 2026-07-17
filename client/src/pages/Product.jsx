@@ -550,11 +550,11 @@ export const Product = () => {
                 <table className="w-full text-sm">
                   <thead className="border-b border-gray-200">
                     <tr>
-                      <th className="px-4 py-3 text-left font-medium text-gray-600">O‘lcham (kg)</th>
-                      <th className="px-4 py-3 text-left font-medium text-gray-600">Narx (kg / $)</th>
+                      <th className="px-4 py-3 text-left font-medium text-gray-600">O‘lcham</th>
                       <th className="px-4 py-3 text-left font-medium text-gray-600">Qutilar soni</th>
                       <th className="px-4 py-3 text-left font-medium text-gray-600">Quti kg</th>
                       <th className="px-4 py-3 text-right font-medium text-gray-600">Jami (kg)</th>
+                      <th className="px-4 py-3 text-left font-medium text-gray-600">Narx (kg / $)</th>
                       <th className="px-4 py-3 text-right font-medium text-gray-600">Umumiy narx ($)</th>
                     </tr>
                   </thead>
@@ -564,12 +564,12 @@ export const Product = () => {
                       return (
                         <tr key={size._id} className="hover:bg-gray-50 transition">
                           <td className="px-4 py-3 font-medium text-gray-800">{size.size}</td>
-                          <td className="px-4 py-3 text-gray-600">{size.price}</td>
                           <td className="px-4 py-3 text-gray-600">{size.boxes}</td>
                           <td className="px-4 py-3 text-gray-600">{size.box_kg}</td>
                           <td className="px-4 py-3 text-right font-medium text-gray-800">
                             {size.total?.toLocaleString() || 0}
                           </td>
+                          <td className="px-4 py-3 text-gray-600">{size.price}</td>
                           <td className="px-4 py-3 text-right font-medium text-emerald-700">
                             {subtotal.toLocaleString()}
                           </td>

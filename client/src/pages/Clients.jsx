@@ -252,9 +252,9 @@ export const Clients = () => {
         const errors = {};
         if (!form.name.trim()) errors.name = 'Ism majburiy.';
         if (!form.phone.trim()) errors.phone = 'Telefon raqam majburiy.';
-        if (form.debt && Number(form.debt) < 0) {
-            errors.debt = 'Qarz manfiy bo‘lishi mumkin emas.';
-        }
+        // if (form.debt && Number(form.debt) < 0) {
+        //     errors.debt = 'Qarz manfiy bo‘lishi mumkin emas.';
+        // }
         setFormErrors(errors);
         return Object.keys(errors).length === 0;
     };
@@ -1100,7 +1100,7 @@ export const Clients = () => {
                                         type="number"
                                         name="debt"
                                         step="0.01"
-                                        min="0"
+                                        // min="0"
                                         value={form.debt}
                                         onChange={handleFormChange}
                                         className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none ${formErrors.debt ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
