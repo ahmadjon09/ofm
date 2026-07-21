@@ -299,7 +299,14 @@ export const Orders = () => {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createErrors, setCreateErrors] = useState({});
-  const emptyItem = { productId: '', productLabel: '', productSizes: [], size: '', price: '', quantityKg: '' };
+  const emptyItem = {
+    productId: '',
+    productLabel: '',
+    productSizes: [],
+    size: '',
+    price: '',
+    quantityBoxes: '', // changed from quantityKg to quantityBoxes
+  };
   const [createForm, setCreateForm] = useState({
     clientId: '',
     clientLabel: '',
@@ -420,7 +427,7 @@ export const Orders = () => {
       productSizes: opt.sizes || [],
       size: '',
       price: '',
-      quantityKg: '',
+      quantityBoxes: '',
     };
     setCreateForm({ ...createForm, items: newItems });
     setCreateErrors((prev) => ({
@@ -465,7 +472,11 @@ export const Orders = () => {
       if (!item.productId) errors[`item-${i}-productId`] = 'Mahsulot tanlang.';
       if (!item.size) errors[`item-${i}-size`] = 'O‘lcham tanlang.';
       if (!item.price || Number(item.price) <= 0) errors[`item-${i}-price`] = 'Narx 0 dan katta bo‘lishi kerak.';
-      if (!item.quantityKg || Number(item.quantityKg) <= 0) errors[`item-${i}-quantityKg`] = 'Miqdor 0 dan katta bo‘lishi kerak.';
+      // validate quantityBoxes: integer > 0
+      const boxes = Number(item.quantityBoxes);
+      if (!item.quantityBoxes || !Number.isInteger(boxes) || boxes <= 0) {
+        errors[`item-${i}-quantityBoxes`] = 'Qutilar soni musbat butun son bo‘lishi kerak.';
+      }
     });
     setCreateErrors(errors);
     return Object.keys(errors).length === 0;
@@ -485,7 +496,7 @@ export const Orders = () => {
         productId: item.productId,
         size: Number(item.size),
         pricePerKg: Number(item.price),
-        quantityKg: Number(item.quantityKg),
+        quantityBoxes: Number(item.quantityBoxes), // send boxes instead of kg
       })),
     };
 
@@ -1027,7 +1038,7 @@ export const Orders = () => {
                               <option value="">Tanlang</option>
                               {sizes.map((s) => (
                                 <option key={s.size} value={s.size}>
-                                  {s.size} ({s.total} kg mavjud)
+                                  {s.size} (quti: {s.boxes}, {s.total} kg mavjud)
                                 </option>
                               ))}
                             </select>
@@ -1054,21 +1065,21 @@ export const Orders = () => {
                             )}
                           </div>
 
-                          {/* Quantity */}
+                          {/* Quantity Boxes - changed from kg to boxes */}
                           <div className="flex-1 min-w-[80px]">
-                            <label className="block text-xs text-gray-500 mb-0.5">Miqdor (kg)</label>
+                            <label className="block text-xs text-gray-500 mb-0.5">Miqdor (quti)</label>
                             <input
                               type="number"
-                              step="0.1"
-                              min="0.1"
-                              value={item.quantityKg}
-                              onChange={(e) => handleItemChange(idx, 'quantityKg', e.target.value)}
-                              className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none ${createErrors[`item-${idx}-quantityKg`] ? 'border-red-400' : 'border-gray-300'
+                              step="1"
+                              min="1"
+                              value={item.quantityBoxes}
+                              onChange={(e) => handleItemChange(idx, 'quantityBoxes', e.target.value)}
+                              className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none ${createErrors[`item-${idx}-quantityBoxes`] ? 'border-red-400' : 'border-gray-300'
                                 }`}
-                              placeholder="0.0"
+                              placeholder="0"
                             />
-                            {createErrors[`item-${idx}-quantityKg`] && (
-                              <p className="text-xs text-red-500 mt-1">{createErrors[`item-${idx}-quantityKg`]}</p>
+                            {createErrors[`item-${idx}-quantityBoxes`] && (
+                              <p className="text-xs text-red-500 mt-1">{createErrors[`item-${idx}-quantityBoxes`]}</p>
                             )}
                           </div>
 

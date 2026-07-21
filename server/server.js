@@ -870,11 +870,12 @@ const clientController = {
 // ============================================================================
 
 const orderController = {
+
     /**
      * Buyurtma yaratish:
      * - Bir nechta mahsulot/o'lcham bo'lishi mumkin
-     * - Har bir item uchun stock yetarliligini tekshiradi
-     * - Stockni kamaytiradi, mijoz qarzini oshiradi
+     * - Har bir item uchun stock yetarliligini tekshiradi (quti soni bo‘yicha)
+     * - Stockni kamaytiradi (qutilar sonini va total kg ni), mijoz qarzini oshiradi
      * - Yetarli bo'lmasa — MongoDB transaction orqali to'liq rollback
      */
     async create(req, res) {
@@ -898,9 +899,11 @@ const orderController = {
                 const orderItems = [];
 
                 for (const reqItem of items) {
-                    const { productId, size, quantityKg, pricePerKg } = reqItem;
+                    const { productId, size, quantityBoxes, pricePerKg } = reqItem;
                     if (!isValidObjectId(productId)) throw new ApiError(400, "Noto'g'ri mahsulot ID.");
-                    if (!quantityKg || quantityKg <= 0) throw new ApiError(400, "Miqdor noto'g'ri.");
+                    if (!Number.isInteger(quantityBoxes) || quantityBoxes <= 0) {
+                        throw new ApiError(400, "Qutilar soni (quantityBoxes) musbat butun son bo'lishi kerak.");
+                    }
 
                     const product = await Product.findById(productId).session(session);
                     if (!product) throw new ApiError(404, "Mahsulot topilmadi.");
@@ -908,12 +911,14 @@ const orderController = {
                     const sizeEntry = product.sizes.find((s) => s.size === Number(size));
                     if (!sizeEntry) throw new ApiError(404, `Ushbu mahsulotda ${size} o'lcham topilmadi.`);
 
-                    if (sizeEntry.total < quantityKg) {
-                        throw new ApiError(400, `Stok yetarli emas: ${product.name} (${size}). Mavjud: ${sizeEntry.total} kg.`);
+                    if (sizeEntry.boxes < quantityBoxes) {
+                        throw new ApiError(400, `Stok yetarli emas: ${product.name} (${size}). Mavjud qutilar: ${sizeEntry.boxes}.`);
                     }
 
-                    // pricePerKg frontdan yuborilgan bo'lsa o'shani ishlatamiz,
-                    // aks holda mahsulotning shu o'lchamdagi standart narxi olinadi.
+                    // Hisob-kitob: buyurtma qilinayotgan kg miqdori
+                    const quantityKg = quantityBoxes * sizeEntry.box_kg;
+
+                    // Narx: agar frontdan yuborilgan bo'lsa, o'shani, aks holda o'lcham narxi
                     let finalPricePerKg = sizeEntry.price;
                     if (pricePerKg !== undefined && pricePerKg !== null && pricePerKg !== '') {
                         finalPricePerKg = Number(pricePerKg);
@@ -922,22 +927,19 @@ const orderController = {
                         }
                     }
 
-                    const remainingTotal = sizeEntry.total - quantityKg;
-                    sizeEntry.total = remainingTotal;
-                    if (sizeEntry.box_kg > 0) {
-                        sizeEntry.boxes = +(remainingTotal / sizeEntry.box_kg).toFixed(2);
-                    }
+                    // Stokni qutilar soni bo‘yicha kamaytirish (total pre('save') hook'da qayta hisoblanadi)
+                    sizeEntry.boxes -= quantityBoxes;
+                    await product.save({ session });
 
                     orderItems.push({
                         product: product._id,
                         productName: product.name,
                         productCategory: product.category,
                         size: sizeEntry.size,
-                        quantityKg,
+                        quantityKg,          // saqlanadigan kg miqdori
                         pricePerKg: finalPricePerKg,
+                        // quantityBoxes ni saqlash kerak bo‘lsa, bu yerga qo‘shish mumkin
                     });
-
-                    await product.save({ session });
                 }
 
                 const [order] = await Order.create(
@@ -966,6 +968,9 @@ const orderController = {
         return sendSuccess(res, 201, "Buyurtma yaratildi.", { order: createdOrder });
     },
 
+    /**
+     * Buyurtmalar ro‘yxati (filtrlash va sahifalash bilan)
+     */
     async list(req, res) {
         const { page, limit, skip } = parsePagination(req.query);
         const { status, clientId, from, to } = req.query;
@@ -992,16 +997,25 @@ const orderController = {
         return sendSuccess(res, 200, "Buyurtmalar ro'yxati.", { orders }, buildMeta(total, page, limit));
     },
 
+    /**
+     * Bitta buyurtmani ID bo‘yicha olish
+     */
     async getById(req, res) {
         const { id } = req.params;
         if (!isValidObjectId(id)) throw new ApiError(400, "Noto'g'ri ID format.");
 
-        const order = await Order.findById(id).populate('client', 'name phone').populate('createdBy', 'name');
+        const order = await Order.findById(id)
+            .populate('client', 'name phone')
+            .populate('createdBy', 'name');
         if (!order) throw new ApiError(404, "Buyurtma topilmadi.");
 
         return sendSuccess(res, 200, "Buyurtma topildi.", { order });
     },
 
+    /**
+     * Buyurtma holatini yangilash (pending / completed / cancelled)
+     * Eslatma: bekor qilishda stockni qaytarish hozircha qo‘shilmagan, kerak bo‘lsa qo‘shish mumkin.
+     */
     async updateStatus(req, res) {
         const { id } = req.params;
         const { status } = req.body;
@@ -1019,6 +1033,9 @@ const orderController = {
         return sendSuccess(res, 200, "Buyurtma holati yangilandi.", { order });
     },
 
+    /**
+     * Buyurtmani butunlay o‘chirish (qaytarib bo‘lmaydi)
+     */
     async remove(req, res) {
         const { id } = req.params;
         if (!isValidObjectId(id)) throw new ApiError(400, "Noto'g'ri ID format.");
