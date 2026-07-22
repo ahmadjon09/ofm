@@ -23,6 +23,7 @@ import { v4 as uuidv4 } from 'uuid';
 import validator from 'validator';
 import ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
+import axios from 'axios'
 // import { startBot } from './bot.js';
 
 // ============================================================================
@@ -2279,24 +2280,24 @@ app.use('/api/v1', router);
 // ============================================================================
 
 const keepServerAlive = () => {
-  const pingInterval = 12 * 60 * 1000;
+    const pingInterval = 12 * 60 * 1000;
 
-  const checkAndPing = () => {
-    const now = new Date();
-    const hourTashkent = (now.getUTCHours() + 5) % 24;
+    const checkAndPing = () => {
+        const now = new Date();
+        const hourTashkent = (now.getUTCHours() + 5) % 24;
 
-    if (hourTashkent >= 8 || hourTashkent < 3) {
-      axios
-        .get(process.env.RENDER_URL)
-        .then(() => console.log('🔄 Server active (Tashkent time)'))
-        .catch(() => console.log('⚠️ Ping failed'))
-    } else {
-      console.log('💤 Keep-alive uyqu rejimida (Tashkent time)')
+        if (hourTashkent >= 8 || hourTashkent < 3) {
+            axios
+                .get(process.env.RENDER_URL)
+                .then(() => console.log('🔄 Server active (Tashkent time)'))
+                .catch(() => console.log('⚠️ Ping failed'))
+        } else {
+            console.log('💤 Keep-alive uyqu rejimida (Tashkent time)')
+        }
     }
-  }
 
-  checkAndPing();
-  setInterval(checkAndPing, pingInterval);
+    checkAndPing();
+    setInterval(checkAndPing, pingInterval);
 }
 
 keepServerAlive();
