@@ -1,7 +1,7 @@
 import axios from 'axios'
 import Cookies from 'js-cookie'
 
-const BASE_URL = `https://ofm-r37o.onrender.com/api/v1`
+const BASE_URL = `https://api.ofmm.uz/api/v1`
 // export const BASE_URL = `http://localhost:5000/api/v1`
 
 const token = Cookies.get('user_token')
