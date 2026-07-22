@@ -2279,18 +2279,27 @@ app.use('/api/v1', router);
 // ============================================================================
 
 const keepServerAlive = () => {
-    if (!process.env.APP_URL) return;
+  const pingInterval = 12 * 60 * 1000;
 
-    setInterval(async () => {
-        try {
-            await fetch(`${process.env.APP_URL}/health`);
-            console.log('🔄 Alive');
-        } catch (e) {
-            console.log('Ping failed');
-        }
-    }, 10 * 60 * 1000);
-};
-keepServerAlive()
+  const checkAndPing = () => {
+    const now = new Date();
+    const hourTashkent = (now.getUTCHours() + 5) % 24;
+
+    if (hourTashkent >= 8 || hourTashkent < 3) {
+      axios
+        .get(process.env.RENDER_URL)
+        .then(() => console.log('🔄 Server active (Tashkent time)'))
+        .catch(() => console.log('⚠️ Ping failed'))
+    } else {
+      console.log('💤 Keep-alive uyqu rejimida (Tashkent time)')
+    }
+  }
+
+  checkAndPing();
+  setInterval(checkAndPing, pingInterval);
+}
+
+keepServerAlive();
 
 app.use((req, res) => {
     return sendError(res, 404, "So'ralgan manzil topilmadi.");
