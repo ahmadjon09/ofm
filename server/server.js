@@ -326,7 +326,7 @@ const productSchema = new mongoose.Schema(
             type: [productSizeSchema],
             validate: {
                 validator: (arr) => Array.isArray(arr) && arr.length > 0,
-                message: "Kamida bitta o'lcham (size) kiritilishi shart.",
+                message: "Kamida bitta Razmer (size) kiritilishi shart.",
             },
         },
     },
@@ -422,7 +422,7 @@ const orderItemSchema = new mongoose.Schema(
         productName: { type: String, required: true },
         productCategory: { type: String },
         size: { type: Number, required: true },
-        quantityBoxes: { type: Number, required: true, min: 1 }, // qutilar (karobka) soni
+        quantityBoxes: { type: Number, required: true, min: 1 }, // qutilar (SHT) soni
         boxKg: { type: Number, required: true, min: 0 }, // bitta quti necha kg (savdo vaqtidagi qiymat)
         quantityKg: { type: Number, required: true, min: 0.01 },
         pricePerKg: { type: Number, required: true, min: 0 },
@@ -450,7 +450,7 @@ const orderSchema = new mongoose.Schema(
         // Jami ko'rsatkichlar — items massividan avtomatik hisoblanadi (pre('save') hook'da),
         // shunda har safar frontendda/hisobotda qayta yig'indi chiqarishga hojat qolmaydi.
         totalKg: { type: Number, default: 0 },       // barcha itemlar bo'yicha jami kg
-        totalBoxes: { type: Number, default: 0 },    // barcha itemlar bo'yicha jami quti (karobka) soni
+        totalBoxes: { type: Number, default: 0 },    // barcha itemlar bo'yicha jami quti (SHT) soni
         status: { type: String, enum: ['pending', 'completed', 'cancelled'], default: 'pending' },
         createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     },
@@ -689,7 +689,7 @@ const productController = {
         const missing = requireFields(req.body, ['name', 'category', 'sizes']);
         if (missing.length) throw new ApiError(400, `Majburiy maydonlar to'ldirilmagan: ${missing.join(', ')}`);
         if (!Array.isArray(sizes) || sizes.length === 0) {
-            throw new ApiError(400, "Kamida bitta o'lcham (size) kiritilishi shart.");
+            throw new ApiError(400, "Kamida bitta Razmer (size) kiritilishi shart.");
         }
 
         const product = await Product.create({ name, category, sizes });
@@ -882,7 +882,7 @@ const orderController = {
 
     /**
      * Buyurtma yaratish:
-     * - Bir nechta mahsulot/o'lcham bo'lishi mumkin
+     * - Bir nechta mahsulot/Razmer bo'lishi mumkin
      * - Har bir item uchun stock yetarliligini tekshiradi (quti soni bo‘yicha)
      * - Stockni kamaytiradi (qutilar sonini va total kg ni), mijoz qarzini oshiradi
      * - Yetarli bo'lmasa — MongoDB transaction orqali to'liq rollback
@@ -918,7 +918,7 @@ const orderController = {
                     if (!product) throw new ApiError(404, "Mahsulot topilmadi.");
 
                     const sizeEntry = product.sizes.find((s) => s.size === Number(size));
-                    if (!sizeEntry) throw new ApiError(404, `Ushbu mahsulotda ${size} o'lcham topilmadi.`);
+                    if (!sizeEntry) throw new ApiError(404, `Ushbu mahsulotda ${size} Razmer topilmadi.`);
 
                     if (sizeEntry.boxes < quantityBoxes) {
                         throw new ApiError(400, `Stok yetarli emas: ${product.name} (${size}). Mavjud qutilar: ${sizeEntry.boxes}.`);
@@ -927,7 +927,7 @@ const orderController = {
                     // Hisob-kitob: buyurtma qilinayotgan kg miqdori
                     const quantityKg = quantityBoxes * sizeEntry.box_kg;
 
-                    // Narx: agar frontdan yuborilgan bo'lsa, o'shani, aks holda o'lcham narxi
+                    // Narx: agar frontdan yuborilgan bo'lsa, o'shani, aks holda Razmer narxi
                     let finalPricePerKg = sizeEntry.price;
                     if (pricePerKg !== undefined && pricePerKg !== null && pricePerKg !== '') {
                         finalPricePerKg = Number(pricePerKg);
@@ -945,7 +945,7 @@ const orderController = {
                         productName: product.name,
                         productCategory: product.category,
                         size: sizeEntry.size,
-                        quantityBoxes,        // qutilar (karobka) soni — hisobotda KAR ustuni
+                        quantityBoxes,        // qutilar (SHT) soni — hisobotda KAR ustuni
                         boxKg: sizeEntry.box_kg, // bitta quti necha kg (savdo vaqtidagi qiymat)
                         quantityKg,          // saqlanadigan kg miqdori
                         pricePerKg: finalPricePerKg,
@@ -1791,7 +1791,7 @@ async function buildOrdersExcel({ month, year, monthName, orders, totalOrders, t
     );
     sheet.addRow([]);
 
-    const headerRow = sheet.addRow(['№', 'Sana', 'Mijoz', 'Telefon', 'Mahsulot', "O'lcham", 'Quti (dona)', "1 quti (kg)", 'Miqdor (kg)', 'Narx/kg', 'Summa', 'Status']);
+    const headerRow = sheet.addRow(['№', 'Sana', 'Mijoz', 'Telefon', 'Mahsulot', "Razmer", 'Quti (dona)', "1 quti (kg)", 'Miqdor (kg)', 'Narx/kg', 'Summa', 'Status']);
     styleExcelHeaderRow(headerRow);
 
     const firstDataRow = sheet.rowCount + 1;
@@ -1858,7 +1858,7 @@ async function buildStockExcel({ rows, totalKg, totalValue, totalBoxes }) {
     );
     sheet.addRow([]);
 
-    const headerRow = sheet.addRow(['№', 'Mahsulot', 'Kategoriya', "O'lcham", 'Quti (dona)', "1 quti (kg)", 'Jami (kg)', 'Qiymat ($)']);
+    const headerRow = sheet.addRow(['№', 'Mahsulot', 'Kategoriya', "Razmer", 'Quti (dona)', "1 quti (kg)", 'Jami (kg)', 'Qiymat ($)']);
     styleExcelHeaderRow(headerRow);
 
     const firstDataRow = sheet.rowCount + 1;
@@ -1989,7 +1989,7 @@ async function buildSummaryExcel({ month, year, monthName, ordersData, stockData
 
     // --- Bo'lim 2: buyurtmalar ---
     addSummarySection(sheet, `2. BUYURTMALAR — ${monthName.toUpperCase()} ${year}`, COL_SPAN);
-    const ordersHeader = sheet.addRow(['№', 'Sana', 'Mijoz', 'Telefon', 'Mahsulot', "O'lcham", 'Quti', 'Miqdor (kg)', 'Narx/kg', 'Summa', 'Status']);
+    const ordersHeader = sheet.addRow(['№', 'Sana', 'Mijoz', 'Telefon', 'Mahsulot', "Razmer", 'Quti', 'Miqdor (kg)', 'Narx/kg', 'Summa', 'Status']);
     styleExcelHeaderRow(ordersHeader);
     let oi = 0;
     ordersData.orders.forEach((order) => {
@@ -2012,7 +2012,7 @@ async function buildSummaryExcel({ month, year, monthName, ordersData, stockData
 
     // --- Bo'lim 3: ombor qoldig'i ---
     addSummarySection(sheet, "3. OMBORDAGI MAHSULOTLAR QOLDIG'I", COL_SPAN);
-    const stockHeader = sheet.addRow(['№', 'Mahsulot', 'Kategoriya', "O'lcham", 'Quti (dona)', "1 quti (kg)", 'Jami (kg)', 'Qiymat']);
+    const stockHeader = sheet.addRow(['№', 'Mahsulot', 'Kategoriya', "Razmer", 'Quti (dona)', "1 quti (kg)", 'Jami (kg)', 'Qiymat']);
     styleExcelHeaderRow(stockHeader);
     stockData.rows.forEach((r, idx) => {
         const row = sheet.addRow([idx + 1, r.product, r.category, r.size, r.boxes, r.boxKg, r.totalKg, formatMoney(r.value)]);
@@ -2482,8 +2482,8 @@ function buildStockPdf({ rows, totalKg, totalValue, totalBoxes }) {
             { key: 'no', label: '№', width: 0.06, align: 'center' },
             { key: 'product', label: 'Mahsulot', width: 0.24 },
             { key: 'category', label: 'Kategoriya', width: 0.16 },
-            { key: 'size', label: "O'lcham", width: 0.1, align: 'center' },
-            { key: 'boxes', label: 'Karobka', width: 0.1, align: 'right' },
+            { key: 'size', label: "Razmer", width: 0.1, align: 'center' },
+            { key: 'boxes', label: 'SHT', width: 0.1, align: 'right' },
             { key: 'totalKg', label: 'Jami (kg)', width: 0.13, align: 'right' },
             { key: 'value', label: 'Qiymat', width: 0.21, align: 'right' },
         ],
@@ -2572,7 +2572,7 @@ function buildSummaryPdf({ month, year, monthName, ordersData, stockData, debtsD
         columns: [
             { key: 'no', label: '№', width: 0.06, align: 'center' },
             { key: 'product', label: 'Mahsulot', width: 0.28 },
-            { key: 'size', label: "O'lcham", width: 0.12, align: 'center' },
+            { key: 'size', label: "Razmer", width: 0.12, align: 'center' },
             { key: 'totalKg', label: 'Jami (kg)', width: 0.22, align: 'right' },
             { key: 'value', label: 'Qiymat', width: 0.32, align: 'right' },
         ],
