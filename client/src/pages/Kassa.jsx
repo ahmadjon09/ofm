@@ -11,11 +11,14 @@ import {
     ArrowUpCircle,
     ArrowDownCircle,
     FileText,
+    PieChart,
+    Printer,
 } from 'lucide-react';
 
 const KASSA_URL = '/kassa';
 const HISTORY_URL = '/kassa/history';
 const EXPENSE_URL = '/kassa/expense';
+const INCOME_URL = '/kassa/income';
 
 // ---------- Toast ----------
 const Toast = ({ toast, onClose }) => {
@@ -46,7 +49,6 @@ const StatCard = ({ icon: Icon, label, value, color = 'blue', subValue }) => {
         purple: 'bg-purple-50 text-purple-600 border-purple-100',
     };
 
-    // Format money helper
     const formatMoney = (val) => {
         if (val === undefined || val === null) return '...';
         return Number(val).toLocaleString('uz-UZ') + ' $';
@@ -69,21 +71,369 @@ const StatCard = ({ icon: Icon, label, value, color = 'blue', subValue }) => {
 };
 
 // ============================================================
+// PRINT: umumiy yordamchi funksiyalar
+// (Orders.jsx'dagi bilan bir xil, ishonchli iframe-asosidagi usul)
+// ============================================================
+
+// HTML-ga chiqarilayotgan matnni xavfsizlashtirish
+const escapeHtml = (value) => {
+    if (value === undefined || value === null) return '';
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+};
+
+// Pul miqdorini chop etish uchun formatlash (belgisiz, faqat son)
+const formatMoneyPrint = (val) => {
+    if (val === undefined || val === null || Number.isNaN(Number(val))) return '0';
+    return Number(val).toLocaleString('uz-UZ', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+};
+
+// Berilgan to'liq HTML hujjatni ko'rinmas iframe orqali chop etadi.
+// Asosiy sahifa DOM/CSS'iga umuman bog'liq emas — shu sababli natija
+// har doim ishonchli va toza chiqadi (window.print() o'rniga).
+const printHtmlDocument = (html, onError) => {
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(iframe);
+
+    const cleanup = () => {
+        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+    };
+
+    const doc = iframe.contentWindow.document;
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    const triggerPrint = () => {
+        try {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+        } catch (err) {
+            if (onError) onError(err);
+            cleanup();
+        }
+    };
+
+    iframe.onload = () => setTimeout(triggerPrint, 80);
+    if (iframe.contentWindow) {
+        iframe.contentWindow.onafterprint = cleanup;
+    }
+    // Zaxira: onafterprint ishlamasa ham, iframe baribir tozalanadi
+    setTimeout(cleanup, 60000);
+};
+
+// Chop etish hujjatlari uchun umumiy CSS (A4, chiroyli jadval)
+const PRINT_BASE_STYLE = `
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+      color: #111827;
+      font-size: 12px;
+      padding: 10mm;
+    }
+    .head {
+      text-align: center;
+      border-bottom: 2px solid #111827;
+      padding-bottom: 8px;
+      margin-bottom: 10px;
+    }
+    .head h1 {
+      margin: 0 0 6px 0;
+      font-size: 18px;
+      letter-spacing: 0.4px;
+    }
+    .head .sub {
+      font-size: 11px;
+      color: #4b5563;
+    }
+    .summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 24px;
+      justify-content: center;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      padding: 8px 14px;
+      margin-bottom: 12px;
+      font-size: 11.5px;
+    }
+    .summary b { color: #111827; }
+    .summary .pos { color: #15803d; font-weight: 700; }
+    .summary .neg { color: #b91c1c; font-weight: 700; }
+
+    table.report {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      table-layout: fixed;
+    }
+    table.report th,
+    table.report td {
+      border: 1px solid #94a3b8;
+      padding: 5px 6px;
+      text-align: left;
+      word-break: break-word;
+    }
+    table.report thead th {
+      background: #f1f5f9;
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 9.5px;
+      letter-spacing: 0.3px;
+      text-align: center;
+    }
+    table.report tbody tr:nth-child(even) { background: #f8fafc; }
+    table.report td.c { text-align: center; }
+    table.report td.r { text-align: right; }
+    table.report td.b { font-weight: 700; }
+    table.report td.pos { color: #15803d; }
+    table.report td.neg { color: #b91c1c; }
+    table.report td.empty { padding: 16px; color: #9ca3af; text-align: center; }
+    table.report tfoot td {
+      border-top: 2px solid #111827;
+      background: #f1f5f9;
+      font-weight: 700;
+    }
+    .badge {
+      display: inline-block;
+      padding: 1px 8px;
+      border-radius: 999px;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+    .badge.in { background: #dcfce7; color: #15803d; }
+    .badge.out { background: #fee2e2; color: #b91c1c; }
+
+    .footer-note {
+      margin-top: 14px;
+      font-size: 9.5px;
+      color: #9ca3af;
+      text-align: right;
+    }
+
+    @media print {
+      table.report { page-break-inside: auto; }
+      table.report tr { page-break-inside: avoid; page-break-after: auto; }
+      thead { display: table-header-group; }
+      tfoot { display: table-footer-group; }
+    }
+`;
+
+// Kassa tarixi (operatsiyalar ro'yxati) hisobotini quradi — joriy filtrlarga mos
+const buildKassaHistoryPrintHtml = ({ transactions, typeFilter, fromDate, toDate, balance }) => {
+    const list = transactions || [];
+    const totalIncome = list.filter((t) => t.type === 'KIRIM').reduce((s, t) => s + Number(t.amount || 0), 0);
+    const totalExpense = list.filter((t) => t.type === 'CHIQIM').reduce((s, t) => s + Number(t.amount || 0), 0);
+
+    const periodLabel = (() => {
+        if (!fromDate && !toDate) return 'Barcha davr';
+        const f = fromDate ? new Date(fromDate).toLocaleDateString('uz-UZ') : '...';
+        const t = toDate ? new Date(toDate).toLocaleDateString('uz-UZ') : 'hozirgacha';
+        return `${f} — ${t}`;
+    })();
+
+    const typeLabel = typeFilter === 'KIRIM' ? 'Faqat kirimlar' : typeFilter === 'CHIQIM' ? 'Faqat chiqimlar' : 'Barcha turlar';
+
+    const rowsHtml = list
+        .map((tx, idx) => {
+            const isIncome = tx.type === 'KIRIM';
+            const dateStr = tx.createdAt
+                ? new Date(tx.createdAt).toLocaleDateString('uz-UZ', {
+                    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+                })
+                : '-';
+            return `
+        <tr>
+          <td class="c">${idx + 1}</td>
+          <td>${escapeHtml(dateStr)}</td>
+          <td class="c"><span class="badge ${isIncome ? 'in' : 'out'}">${isIncome ? 'KIRIM' : 'CHIQIM'}</span></td>
+          <td class="r b ${isIncome ? 'pos' : 'neg'}">${isIncome ? '+' : '-'}${formatMoneyPrint(tx.amount)}</td>
+          <td>${escapeHtml(tx.reason || tx.source || '-')}</td>
+          <td>${escapeHtml(tx.user?.name || 'Noma’lum')}</td>
+        </tr>`;
+        })
+        .join('');
+
+    const emptyRowHtml = list.length === 0
+        ? `<tr><td colspan="6" class="empty">Operatsiyalar topilmadi</td></tr>`
+        : '';
+
+    return `<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8" />
+<title>Kassa tarixi hisoboti</title>
+<style>
+  ${PRINT_BASE_STYLE}
+  @page { size: A4 portrait; margin: 10mm; }
+</style>
+</head>
+<body>
+  <div class="head">
+    <h1>KASSA TARIXI HISOBOTI</h1>
+    <div class="sub">Davr: ${escapeHtml(periodLabel)} &nbsp;|&nbsp; Filtr: ${escapeHtml(typeLabel)} &nbsp;|&nbsp; Yaratilgan sana: ${escapeHtml(new Date().toLocaleString('uz-UZ'))}</div>
+  </div>
+
+  <div class="summary">
+    <span>Operatsiyalar soni: <b>${list.length}</b></span>
+    <span>Jami kirim: <span class="pos">+${formatMoneyPrint(totalIncome)} $</span></span>
+    <span>Jami chiqim: <span class="neg">-${formatMoneyPrint(totalExpense)} $</span></span>
+    <span>Joriy balans: <b>${formatMoneyPrint(balance)} $</b></span>
+  </div>
+
+  <table class="report">
+    <thead>
+      <tr>
+        <th style="width:6%">№</th>
+        <th style="width:18%">Sana</th>
+        <th style="width:12%">Turi</th>
+        <th style="width:15%">Summa ($)</th>
+        <th style="width:32%">Sabab / Izoh</th>
+        <th style="width:17%">Kim tomonidan</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rowsHtml}${emptyRowHtml}
+    </tbody>
+    <tfoot>
+      <tr>
+        <td colspan="3" class="r">Jami:</td>
+        <td class="r">
+          <span class="pos">+${formatMoneyPrint(totalIncome)}</span> /
+          <span class="neg">-${formatMoneyPrint(totalExpense)}</span>
+        </td>
+        <td colspan="2"></td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <div class="footer-note">Ombor va Savdo Boshqaruv Tizimi — avtomatik yaratilgan hisobot</div>
+</body>
+</html>`;
+};
+
+// Chiqimlar guruhlari (oylik) hisobotini quradi
+const buildKassaGroupPrintHtml = ({ selectedMonth, groupData }) => {
+    const list = groupData || [];
+    const [year, monthNum] = (selectedMonth || '').split('-').map(Number);
+    const monthLabel = year && monthNum
+        ? new Date(year, monthNum - 1, 1).toLocaleDateString('uz-UZ', { month: 'long', year: 'numeric' })
+        : '-';
+
+    const totalSum = list.reduce((s, i) => s + Number(i.total || 0), 0);
+    const totalCount = list.reduce((s, i) => s + Number(i.count || 0), 0);
+
+    const rowsHtml = list
+        .map((item, idx) => `
+      <tr>
+        <td class="c">${idx + 1}</td>
+        <td>${escapeHtml(item.note)}</td>
+        <td class="r b neg">${formatMoneyPrint(item.total)}</td>
+        <td class="c">${item.count}</td>
+        <td class="r">${item.count > 1 ? formatMoneyPrint(item.total / item.count) : '-'}</td>
+      </tr>`)
+        .join('');
+
+    const emptyRowHtml = list.length === 0
+        ? `<tr><td colspan="5" class="empty">Tanlangan oyda chiqimlar mavjud emas</td></tr>`
+        : '';
+
+    return `<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8" />
+<title>Chiqimlar guruhlari hisoboti</title>
+<style>
+  ${PRINT_BASE_STYLE}
+  @page { size: A4 portrait; margin: 10mm; }
+</style>
+</head>
+<body>
+  <div class="head">
+    <h1>CHIQIMLAR GURUHLARI HISOBOTI</h1>
+    <div class="sub">Oy: ${escapeHtml(monthLabel)} &nbsp;|&nbsp; Yaratilgan sana: ${escapeHtml(new Date().toLocaleString('uz-UZ'))}</div>
+  </div>
+
+  <div class="summary">
+    <span>Guruhlar soni: <b>${list.length}</b></span>
+    <span>Jami chiqimlar soni: <b>${totalCount}</b></span>
+    <span>Jami summa: <span class="neg">${formatMoneyPrint(totalSum)} $</span></span>
+  </div>
+
+  <table class="report">
+    <thead>
+      <tr>
+        <th style="width:6%">№</th>
+        <th style="width:40%">Sabab / Izoh</th>
+        <th style="width:18%">Jami summa ($)</th>
+        <th style="width:12%">Soni</th>
+        <th style="width:24%">O‘rtacha ($)</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rowsHtml}${emptyRowHtml}
+    </tbody>
+    <tfoot>
+      <tr>
+        <td class="r">Jami:</td>
+        <td class="r neg">${formatMoneyPrint(totalSum)}</td>
+        <td class="c">${totalCount}</td>
+        <td></td>
+      </tr>
+    </tfoot>
+  </table>
+
+  <div class="footer-note">Ombor va Savdo Boshqaruv Tizimi — avtomatik yaratilgan hisobot</div>
+</body>
+</html>`;
+};
+
+// ============================================================
 // MAIN COMPONENT
 // ============================================================
 export const Kassa = () => {
     // ---------- State ----------
     const [page, setPage] = useState(1);
-    const limit = 300; // Limitni oshirdik, oxirgi 300 ta operatsiyani olamiz
+    const limit = 300;
     const [typeFilter, setTypeFilter] = useState('');
     const [fromDate, setFromDate] = useState('');
     const [toDate, setToDate] = useState('');
+
+    // ---------- Income modal ----------
+    const [incomeModalOpen, setIncomeModalOpen] = useState(false);
+    const [incomeForm, setIncomeForm] = useState({ amount: '', source: '' });
+    const [incomeErrors, setIncomeErrors] = useState({});
+    const [incomeSaving, setIncomeSaving] = useState(false);
 
     // ---------- Expense modal ----------
     const [expenseModalOpen, setExpenseModalOpen] = useState(false);
     const [expenseForm, setExpenseForm] = useState({ amount: '', reason: '' });
     const [expenseErrors, setExpenseErrors] = useState({});
     const [expenseSaving, setExpenseSaving] = useState(false);
+
+    // ---------- Group modal ----------
+    const [groupModalOpen, setGroupModalOpen] = useState(false);
+    const [selectedMonth, setSelectedMonth] = useState(() => {
+        const now = new Date();
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    });
+    const [groupData, setGroupData] = useState([]);
+    const [groupLoading, setGroupLoading] = useState(false);
+    const [groupError, setGroupError] = useState(null);
 
     // ---------- Toast ----------
     const [toast, setToast] = useState(null);
@@ -108,14 +458,9 @@ export const Kassa = () => {
         (url) => api.get(url).then((res) => res.data),
         { revalidateOnFocus: true }
     );
-
     const balance = balanceData?.data?.balance ?? 0;
 
-    // ---------- SWR: History (Barcha filtrlarsiz ham so'nggi 300 tasini olamiz statistika uchun) ----------
-    // Eslatma: Statistikani to'g'ri ishlashi uchun bizga "barcha" ma'lumot kerak emas, 
-    // lekin filtr qo'yilganda ham statistika hozirgi oyni ko'rsatishi kerak.
-    // Shuning uchun statistikani alohida hisoblaymiz.
-
+    // ---------- SWR: History ----------
     const buildQuery = useCallback(() => {
         const params = new URLSearchParams({ page, limit });
         if (typeFilter) params.append('type', typeFilter);
@@ -140,39 +485,23 @@ export const Kassa = () => {
     const meta = historyData?.meta || { total: 0, page: 1, totalPages: 1 };
     const totalPages = Math.max(meta.totalPages || 1, 1);
 
-    // ---------- STATISTIKA HISOBLASH (Frontendda) ----------
+    // ---------- Statistikani hisoblash (oylik) ----------
     const monthlyStats = useMemo(() => {
-        // Hozirgi oy va yil
         const now = new Date();
-        const currentMonth = now.getMonth(); // 0-11
+        const currentMonth = now.getMonth();
         const currentYear = now.getFullYear();
-
         let income = 0;
         let expense = 0;
-
-        // Agar tarix ma'lumoti bo'lsa, uni filtrlaymiz
-        // DIQQAT: Biz faqat sahifalangan ma'lumotlardan (transactions) hisoblayapmiz.
-        // Agar sizda juda ko'p ma'lumot bo'lsa va ular boshqa sahifada qolib ketsa, 
-        // bu usul to'liq bo'lmaydi. Lekin limit=300 qilingani uchun so'nggi operatsiyalar qamrovda bo'ladi.
-
-        // To'liqroq bo'lishi uchun, agar filter yo'q bo'lsa, barcha kelgan ma'lumotdan hisoblaymiz.
-        // Agar filter bor bo'lsa, faqat ko'rinayotgan qismidan hisoblash mantiqsiz, 
-        // shuning uchun filter bor paytda statistikani yashirish yoki alohida so'rov qilish kerak.
-        // Hozircha sodda variant: Barcha yuklangan transactionlardan hozirgi oyni topamiz.
 
         if (historyData?.data?.history) {
             historyData.data.history.forEach(tx => {
                 const txDate = new Date(tx.createdAt);
                 if (txDate.getMonth() === currentMonth && txDate.getFullYear() === currentYear) {
-                    if (tx.type === 'KIRIM') {
-                        income += Number(tx.amount);
-                    } else if (tx.type === 'CHIQIM') {
-                        expense += Number(tx.amount);
-                    }
+                    if (tx.type === 'KIRIM') income += Number(tx.amount);
+                    else if (tx.type === 'CHIQIM') expense += Number(tx.amount);
                 }
             });
         }
-
         return { income, expense };
     }, [historyData]);
 
@@ -187,6 +516,80 @@ export const Kassa = () => {
     const goToPage = (p) => {
         if (p < 1 || p > totalPages) return;
         setPage(p);
+    };
+
+    // ---------- Print: kassa tarixi hisoboti ----------
+    const handlePrintHistory = () => {
+        if (!transactions.length) {
+            showToast('Chop etish uchun operatsiyalar topilmadi.', 'error');
+            return;
+        }
+        const html = buildKassaHistoryPrintHtml({ transactions, typeFilter, fromDate, toDate, balance });
+        printHtmlDocument(html, () => showToast('Chop etishda xatolik yuz berdi.', 'error'));
+    };
+
+    // ---------- Print: chiqimlar guruhlari hisoboti ----------
+    const handlePrintGroup = () => {
+        if (!groupData.length) {
+            showToast('Chop etish uchun ma’lumot yo‘q.', 'error');
+            return;
+        }
+        const html = buildKassaGroupPrintHtml({ selectedMonth, groupData });
+        printHtmlDocument(html, () => showToast('Chop etishda xatolik yuz berdi.', 'error'));
+    };
+
+    // ---------- Income modal ----------
+    const openIncomeModal = () => {
+        setIncomeForm({ amount: '', source: '' });
+        setIncomeErrors({});
+        setIncomeModalOpen(true);
+    };
+
+    const closeIncomeModal = () => {
+        if (incomeSaving) return;
+        setIncomeModalOpen(false);
+    };
+
+    const handleIncomeChange = (e) => {
+        const { name, value } = e.target;
+        setIncomeForm({ ...incomeForm, [name]: value });
+        setIncomeErrors((prev) => ({ ...prev, [name]: undefined }));
+    };
+
+    const validateIncome = () => {
+        const errors = {};
+        if (!incomeForm.amount || Number(incomeForm.amount) <= 0) {
+            errors.amount = 'Summa 0 dan katta bo‘lishi kerak.';
+        }
+        if (!incomeForm.source || !incomeForm.source.trim()) {
+            errors.source = 'Manba (kimdan yoki nima uchun) kiritilishi shart.';
+        }
+        setIncomeErrors(errors);
+        return Object.keys(errors).length === 0;
+    };
+
+    const handleIncomeSubmit = async (e) => {
+        e.preventDefault();
+        if (!validateIncome()) {
+            showToast('Iltimos, xatoliklarni tuzating.', 'error');
+            return;
+        }
+
+        setIncomeSaving(true);
+        try {
+            await api.post(INCOME_URL, {
+                amount: Number(incomeForm.amount),
+                source: incomeForm.source.trim(),
+            });
+            showToast('Kirim muvaffaqiyatli yozildi.', 'success');
+            await mutateBalance();
+            await mutateHistory();
+            setIncomeModalOpen(false);
+        } catch (err) {
+            showToast(err.response?.data?.message || err.message || 'Xatolik yuz berdi.', 'error');
+        } finally {
+            setIncomeSaving(false);
+        }
     };
 
     // ---------- Expense modal ----------
@@ -225,7 +628,6 @@ export const Kassa = () => {
             showToast('Iltimos, xatoliklarni tuzating.', 'error');
             return;
         }
-
         setExpenseSaving(true);
         try {
             await api.post(EXPENSE_URL, {
@@ -243,7 +645,73 @@ export const Kassa = () => {
         }
     };
 
-    // ---------- Loading states ----------
+    // ---------- Group modal ----------
+    const fetchGroupData = useCallback(async (month) => {
+        if (!month) return;
+        const [year, monthNum] = month.split('-').map(Number);
+        const from = new Date(year, monthNum - 1, 1);
+        const to = new Date(year, monthNum, 0);
+        const fromISO = from.toISOString();
+        const toISO = to.toISOString();
+
+        setGroupLoading(true);
+        setGroupError(null);
+        try {
+            const params = new URLSearchParams({
+                type: 'CHIQIM',
+                from: fromISO,
+                to: toISO,
+                limit: 1000,
+            });
+            const resp = await api.get(`${HISTORY_URL}?${params.toString()}`);
+            const items = resp.data?.data?.history || [];
+
+            const groups = items.reduce((acc, tx) => {
+                const reason = tx.reason || 'Izohsiz';
+                if (!acc[reason]) {
+                    acc[reason] = { total: 0, count: 0 };
+                }
+                acc[reason].total += Number(tx.amount);
+                acc[reason].count += 1;
+                return acc;
+            }, {});
+
+            const groupedArray = Object.entries(groups).map(([note, data]) => ({
+                note,
+                total: data.total,
+                count: data.count,
+            }));
+            groupedArray.sort((a, b) => b.total - a.total);
+            setGroupData(groupedArray);
+        } catch (err) {
+            setGroupError(err.message || 'Maʼlumotlarni yuklashda xatolik');
+            showToast('Chiqimlarni yuklab bo‘lmadi.', 'error');
+        } finally {
+            setGroupLoading(false);
+        }
+    }, [showToast]);
+
+    useEffect(() => {
+        if (groupModalOpen) {
+            fetchGroupData(selectedMonth);
+        }
+    }, [groupModalOpen, selectedMonth, fetchGroupData]);
+
+    const openGroupModal = () => {
+        setGroupModalOpen(true);
+    };
+
+    const closeGroupModal = () => {
+        setGroupModalOpen(false);
+        setGroupData([]);
+        setGroupError(null);
+    };
+
+    const handleMonthChange = (e) => {
+        setSelectedMonth(e.target.value);
+    };
+
+    // ---------- Loading state ----------
     const isLoading = balanceLoading || historyLoading;
 
     return (
@@ -255,17 +723,38 @@ export const Kassa = () => {
                         <h1 className="text-2xl font-bold text-gray-900">Kassa Boshqaruvi</h1>
                         <p className="text-sm text-gray-500 mt-0.5">Moliyaviy oqimlar va hisobotlar</p>
                     </div>
-                    <button
-                        onClick={openExpenseModal}
-                        className="inline-flex items-center gap-2 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium shadow-sm transition self-start sm:self-auto"
-                    >
-                        <ArrowDownCircle size={18} /> Chiqim qo‘shish
-                    </button>
+                    <div className="flex gap-2 flex-wrap">
+                        <button
+                            onClick={openIncomeModal}
+                            className="inline-flex items-center gap-2 px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
+                        >
+                            <ArrowUpCircle size={18} /> Kirim qo‘shish
+                        </button>
+                        <button
+                            onClick={openExpenseModal}
+                            className="inline-flex items-center gap-2 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
+                        >
+                            <ArrowDownCircle size={18} /> Chiqim qo‘shish
+                        </button>
+                        <button
+                            onClick={openGroupModal}
+                            className="inline-flex items-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
+                        >
+                            <PieChart size={18} /> Chiqimlar guruhlari
+                        </button>
+                        <button
+                            onClick={handlePrintHistory}
+                            disabled={!transactions.length}
+                            title="Joriy filtrlar bo‘yicha kassa tarixini chop etish"
+                            className="inline-flex items-center gap-2 px-4 py-2.5 bg-gray-700 hover:bg-gray-800 text-white rounded-lg text-sm font-medium shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <Printer size={18} /> Hisobotni chop etish
+                        </button>
+                    </div>
                 </div>
 
                 {/* Stats Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                    {/* 1. Joriy Balans */}
                     <div className="bg-white rounded-xl border border-gray-200 p-4 flex items-center gap-4 shadow-sm">
                         <div className="p-3 bg-blue-100 rounded-full">
                             <Wallet className="w-6 h-6 text-blue-600" />
@@ -281,8 +770,6 @@ export const Kassa = () => {
                             </p>
                         </div>
                     </div>
-
-                    {/* 2. Hozirgi Oy Kirim */}
                     <StatCard
                         icon={ArrowUpCircle}
                         label="Shu oygi Kirim"
@@ -290,8 +777,6 @@ export const Kassa = () => {
                         color="green"
                         subValue="Jami tushumlar"
                     />
-
-                    {/* 3. Hozirgi Oy Chiqim */}
                     <StatCard
                         icon={ArrowDownCircle}
                         label="Shu oygi Chiqim"
@@ -405,8 +890,8 @@ export const Kassa = () => {
                                                     <td className={`px-6 py-4 text-sm font-bold text-right ${isIncome ? 'text-green-600' : 'text-red-600'}`}>
                                                         {isIncome ? '+' : '-'}{Number(tx.amount).toLocaleString()}
                                                     </td>
-                                                    <td className="px-6 py-4 text-sm text-gray-600 max-w-xs truncate" title={tx.reason}>
-                                                        {tx.reason || '-'}
+                                                    <td className="px-6 py-4 text-sm text-gray-600 max-w-xs truncate" title={tx.reason || tx.source}>
+                                                        {tx.reason || tx.source || '-'}
                                                     </td>
                                                     <td className="px-6 py-4 text-sm text-gray-600">
                                                         <div className="flex items-center gap-2">
@@ -451,6 +936,87 @@ export const Kassa = () => {
                     )}
                 </div>
 
+                {/* ====== Income Modal ====== */}
+                {incomeModalOpen && (
+                    <div
+                        className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm"
+                        onClick={closeIncomeModal}
+                    >
+                        <div
+                            className="bg-white w-full max-w-md rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto p-6 relative pointer-events-auto"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <button
+                                onClick={closeIncomeModal}
+                                className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 disabled:opacity-40 p-1 rounded-full hover:bg-gray-100"
+                                disabled={incomeSaving}
+                            >
+                                <X size={20} />
+                            </button>
+
+                            <div className="mb-6">
+                                <h2 className="text-xl font-bold text-gray-900">Kassaga kirim</h2>
+                                <p className="text-sm text-gray-500 mt-1">
+                                    Mavjud balans: <span className="font-semibold text-gray-900">{balance.toLocaleString()} $</span>
+                                </p>
+                            </div>
+
+                            <form onSubmit={handleIncomeSubmit} className="space-y-5">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Summa ($) <span className="text-red-500">*</span></label>
+                                    <div className="relative">
+                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
+                                        <input
+                                            type="number"
+                                            name="amount"
+                                            step="0.01"
+                                            min="0.01"
+                                            value={incomeForm.amount}
+                                            onChange={handleIncomeChange}
+                                            className={`w-full pl-8 pr-4 py-2.5 border rounded-lg focus:ring-2 focus:ring-green-500 outline-none transition ${incomeErrors.amount ? 'border-red-400 bg-red-50' : 'border-gray-300 focus:border-green-500'}`}
+                                            placeholder="0.00"
+                                            autoFocus
+                                        />
+                                    </div>
+                                    {incomeErrors.amount && <p className="text-xs text-red-500 mt-1.5 flex items-center gap-1"><AlertCircle size={12} /> {incomeErrors.amount}</p>}
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1.5">Manba (kimdan yoki nima uchun) <span className="text-red-500">*</span></label>
+                                    <textarea
+                                        name="source"
+                                        rows="3"
+                                        value={incomeForm.source}
+                                        onChange={handleIncomeChange}
+                                        className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 focus:ring-green-500 outline-none transition resize-none ${incomeErrors.source ? 'border-red-400 bg-red-50' : 'border-gray-300 focus:border-green-500'}`}
+                                        placeholder="Masalan: Mijozdan naqd to‘lov..."
+                                    />
+                                    {incomeErrors.source && <p className="text-xs text-red-500 mt-1.5 flex items-center gap-1"><AlertCircle size={12} /> {incomeErrors.source}</p>}
+                                </div>
+
+                                <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
+                                    <button
+                                        type="button"
+                                        onClick={closeIncomeModal}
+                                        disabled={incomeSaving}
+                                        className="px-5 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition text-sm font-medium disabled:opacity-50"
+                                    >
+                                        Bekor qilish
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={incomeSaving}
+                                        className="px-5 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium shadow-md shadow-green-200 transition disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                                    >
+                                        {incomeSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                                        Tasdiqlash
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                )}
+
                 {/* ====== Expense Modal ====== */}
                 {expenseModalOpen && (
                     <div
@@ -458,7 +1024,7 @@ export const Kassa = () => {
                         onClick={closeExpenseModal}
                     >
                         <div
-                            className="bg-white w-full max-w-md rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto p-6 relative pointer-events-auto transform transition-all scale-100"
+                            className="bg-white w-full max-w-md rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto p-6 relative pointer-events-auto"
                             onClick={(e) => e.stopPropagation()}
                         >
                             <button
@@ -488,7 +1054,7 @@ export const Kassa = () => {
                                             min="0.01"
                                             value={expenseForm.amount}
                                             onChange={handleExpenseChange}
-                                            className={`w-full pl-8 pr-4 py-2.5 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition ${expenseErrors.amount ? 'border-red-400 bg-red-50' : 'border-gray-300 focus:border-blue-500'}`}
+                                            className={`w-full pl-8 pr-4 py-2.5 border rounded-lg focus:ring-2 focus:ring-red-500 outline-none transition ${expenseErrors.amount ? 'border-red-400 bg-red-50' : 'border-gray-300 focus:border-red-500'}`}
                                             placeholder="0.00"
                                             autoFocus
                                         />
@@ -503,7 +1069,7 @@ export const Kassa = () => {
                                         rows="3"
                                         value={expenseForm.reason}
                                         onChange={handleExpenseChange}
-                                        className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition resize-none ${expenseErrors.reason ? 'border-red-400 bg-red-50' : 'border-gray-300 focus:border-blue-500'}`}
+                                        className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 focus:ring-red-500 outline-none transition resize-none ${expenseErrors.reason ? 'border-red-400 bg-red-50' : 'border-gray-300 focus:border-red-500'}`}
                                         placeholder="Masalan: Ofis anjomlari uchun..."
                                     />
                                     {expenseErrors.reason && <p className="text-xs text-red-500 mt-1.5 flex items-center gap-1"><AlertCircle size={12} /> {expenseErrors.reason}</p>}
@@ -528,6 +1094,125 @@ export const Kassa = () => {
                                     </button>
                                 </div>
                             </form>
+                        </div>
+                    </div>
+                )}
+
+                {/* ====== Group Modal ====== */}
+                {groupModalOpen && (
+                    <div
+                        className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm"
+                        onClick={closeGroupModal}
+                    >
+                        <div
+                            className="bg-white w-full max-w-2xl rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto p-6 relative pointer-events-auto"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <button
+                                onClick={closeGroupModal}
+                                className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 p-1 rounded-full hover:bg-gray-100"
+                            >
+                                <X size={20} />
+                            </button>
+
+                            <div className="mb-5">
+                                <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                                    <PieChart size={22} className="text-purple-600" />
+                                    Chiqimlar guruhlari
+                                </h2>
+                                <p className="text-sm text-gray-500 mt-1">
+                                    Tanlangan oy bo‘yicha chiqimlar sabab (izoh) bo‘yicha guruhlangan
+                                </p>
+                            </div>
+
+                            <div className="flex items-center gap-3 mb-4 flex-wrap">
+                                <label htmlFor="monthSelect" className="text-sm font-medium text-gray-700">Oy:</label>
+                                <input
+                                    id="monthSelect"
+                                    type="month"
+                                    value={selectedMonth}
+                                    onChange={handleMonthChange}
+                                    className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500 outline-none"
+                                />
+                                <button
+                                    onClick={() => fetchGroupData(selectedMonth)}
+                                    disabled={groupLoading}
+                                    className="px-4 py-1.5 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 transition disabled:opacity-50 inline-flex items-center gap-1"
+                                >
+                                    {groupLoading ? <Loader2 size={16} className="animate-spin" /> : 'Yangilash'}
+                                </button>
+                                <button
+                                    onClick={handlePrintGroup}
+                                    disabled={groupLoading || !groupData.length}
+                                    className="px-4 py-1.5 bg-gray-700 hover:bg-gray-800 text-white rounded-lg text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+                                >
+                                    <Printer size={15} /> Chop etish
+                                </button>
+                            </div>
+
+                            {groupLoading ? (
+                                <div className="flex justify-center py-10">
+                                    <Loader2 size={28} className="animate-spin text-purple-600" />
+                                </div>
+                            ) : groupError ? (
+                                <div className="text-center py-8 text-red-500">
+                                    <AlertCircle className="w-10 h-10 mx-auto mb-2" />
+                                    <p>{groupError}</p>
+                                </div>
+                            ) : groupData.length === 0 ? (
+                                <div className="text-center py-10 text-gray-400">
+                                    <FileText className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                                    <p className="text-gray-500">Tanlangan oyda chiqimlar mavjud emas.</p>
+                                </div>
+                            ) : (
+                                <div className="overflow-x-auto border border-gray-200 rounded-xl">
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-gray-50 border-b border-gray-200">
+                                            <tr>
+                                                <th className="px-4 py-3 text-left font-semibold text-gray-600">Sabab / Izoh</th>
+                                                <th className="px-4 py-3 text-right font-semibold text-gray-600">Jami summa ($)</th>
+                                                <th className="px-4 py-3 text-center font-semibold text-gray-600">Soni</th>
+                                                <th className="px-4 py-3 text-right font-semibold text-gray-600">O‘rtacha</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {groupData.map((item, idx) => (
+                                                <tr key={idx} className="hover:bg-gray-50 transition">
+                                                    <td className="px-4 py-3 text-gray-800 font-medium">{item.note}</td>
+                                                    <td className="px-4 py-3 text-right font-bold text-red-600">
+                                                        {item.total.toLocaleString()}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-center text-gray-600">{item.count}</td>
+                                                    <td className="px-4 py-3 text-right text-gray-500">
+                                                        {item.count > 1 ? (item.total / item.count).toFixed(2) : '-'}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                        <tfoot className="border-t-2 border-gray-300 bg-gray-50">
+                                            <tr>
+                                                <td className="px-4 py-3 font-bold text-gray-800">Jami</td>
+                                                <td className="px-4 py-3 text-right font-bold text-red-700">
+                                                    {groupData.reduce((sum, item) => sum + item.total, 0).toLocaleString()}
+                                                </td>
+                                                <td className="px-4 py-3 text-center font-bold text-gray-800">
+                                                    {groupData.reduce((sum, item) => sum + item.count, 0)}
+                                                </td>
+                                                <td className="px-4 py-3 text-right text-gray-500">-</td>
+                                            </tr>
+                                        </tfoot>
+                                    </table>
+                                </div>
+                            )}
+
+                            <div className="mt-5 flex justify-end">
+                                <button
+                                    onClick={closeGroupModal}
+                                    className="px-5 py-2.5 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg text-sm font-medium transition"
+                                >
+                                    Yopish
+                                </button>
+                            </div>
                         </div>
                     </div>
                 )}

@@ -19,7 +19,7 @@ import {
     ArrowLeft,
     CreditCard,
     FileText,
-    Printer,
+    Download,
 } from 'lucide-react';
 
 const CLIENTS_URL = '/clients';
@@ -118,7 +118,7 @@ export const Clients = () => {
     const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
     const [page, setPage] = useState(1);
-    const limit = 10;
+    const limit = 30;
 
     // ---------- Detail state (ID) ----------
     const [selectedClientId, setSelectedClientId] = useState(null);
@@ -136,11 +136,13 @@ export const Clients = () => {
     const [paymentSaving, setPaymentSaving] = useState(false);
     const [paymentErrors, setPaymentErrors] = useState({});
 
+    // ---------- Report download state ----------
+    const [reportDownloading, setReportDownloading] = useState(false);
+
     // ---------- Confirm & Toast ----------
     const [confirmState, setConfirmState] = useState(null);
     const [toast, setToast] = useState(null);
     const toastTimer = useRef(null);
-    const printRef = useRef(null);
 
     const showToast = useCallback((message, type = 'info') => {
         setToast({ message, type });
@@ -252,9 +254,6 @@ export const Clients = () => {
         const errors = {};
         if (!form.name.trim()) errors.name = 'Ism majburiy.';
         if (!form.phone.trim()) errors.phone = 'Telefon raqam majburiy.';
-        // if (form.debt && Number(form.debt) < 0) {
-        //     errors.debt = 'Qarz manfiy bo‘lishi mumkin emas.';
-        // }
         setFormErrors(errors);
         return Object.keys(errors).length === 0;
     };
@@ -299,7 +298,6 @@ export const Clients = () => {
             phone: form.phone.trim(),
         };
 
-        // Add debt if it's provided (for manual adjustment)
         if (form.debt !== '' && form.debt !== null && form.debt !== undefined) {
             payload.debt = Number(form.debt);
         }
@@ -395,12 +393,56 @@ export const Clients = () => {
     const goToDetail = (clientId) => setSelectedClientId(clientId);
     const goToList = () => setSelectedClientId(null);
 
-    // ---------- Print function ----------
-    const handlePrint = () => {
-        if (!client) return;
-        window.print();
-    };
+    // ---------- Download report ----------
+    const handleDownloadReport = async () => {
+        if (!selectedClientId) return;
 
+        setReportDownloading(true);
+
+        try {
+            const response = await api.get(
+                `/reports/client/${selectedClientId}`,
+                {
+                    responseType: "blob",
+                }
+            );
+
+            const contentType = response.headers["content-type"];
+
+            if (
+                !contentType ||
+                !contentType.includes(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            ) {
+                throw new Error(
+                    "Server Excel fayl qaytarmadi. Iltimos, qaytadan urinib ko‘ring."
+                );
+            }
+
+            const blob = response.data;
+
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = `client-report-${selectedClientId}.xlsx`;
+
+            document.body.appendChild(link);
+            link.click();
+
+            link.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (err) {
+            showToast(
+                err.response?.data?.message ||
+                err.message ||
+                "Hisobot yuklab olishda xatolik",
+                "error"
+            );
+        } finally {
+            setReportDownloading(false);
+        }
+    };
     // ---------- Payment quick-amount helpers ----------
     const currentDebt = client?.debt || 0;
     const paymentAmountNum = Number(paymentForm.amount) || 0;
@@ -453,164 +495,168 @@ export const Clients = () => {
                             <ArrowLeft size={18} /> Mijozlar ro‘yxati
                         </button>
                         <button
-                            onClick={handlePrint}
-                            className="inline-flex items-center gap-2 px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg text-sm font-medium shadow-sm transition print-hide"
+                            onClick={handleDownloadReport}
+                            disabled={reportDownloading}
+                            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition disabled:opacity-60"
                         >
-                            <Printer size={18} /> Chop etish
+                            {reportDownloading ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                                <Download size={18} />
+                            )}
+                            Hisobot yuklab olish
                         </button>
                     </div>
 
-                    {/* Printable content */}
-                    <div ref={printRef} className="print-content">
-                        <div className="bg-white rounded-2xl shadow-md border border-gray-200 overflow-hidden">
-                            {/* Header */}
-                            <div className="px-6 py-5 border-b border-gray-200 flex flex-wrap items-start justify-between gap-4">
-                                <div>
-                                    <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
-                                        <Users className="text-blue-600" size={28} />
-                                        {client.name}
-                                    </h1>
-                                    <div className="flex items-center gap-3 mt-1">
-                                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
-                                            <Phone size={14} />
-                                            {client.phone}
+                    {/* Client detail content (no print-specific wrappers) */}
+                    <div className="bg-white rounded-2xl shadow-md border border-gray-200 overflow-hidden">
+                        {/* Header */}
+                        <div className="px-6 py-5 border-b border-gray-200 flex flex-wrap items-start justify-between gap-4">
+                            <div>
+                                <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
+                                    <Users className="text-blue-600" size={28} />
+                                    {client.name}
+                                </h1>
+                                <div className="flex items-center gap-3 mt-1">
+                                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
+                                        <Phone size={14} />
+                                        {client.phone}
+                                    </span>
+                                    {isDeleted && (
+                                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-red-50 text-red-600">
+                                            <Trash2 size={14} />
+                                            O‘chirilgan
                                         </span>
-                                        {isDeleted && (
-                                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-red-50 text-red-600">
-                                                <Trash2 size={14} />
-                                                O‘chirilgan
-                                            </span>
-                                        )}
-                                        <span className="text-xs text-gray-400">
-                                            Qo‘shilgan: {new Date(client.createdAt).toLocaleDateString('uz-UZ')}
-                                        </span>
-                                    </div>
-                                </div>
-                                <div className="flex gap-2 flex-wrap print-hide">
-                                    {!isDeleted && (
-                                        <button
-                                            onClick={() => openPaymentModal(client)}
-                                            className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
-                                        >
-                                            <CreditCard size={16} /> To‘lov qo‘shish
-                                        </button>
                                     )}
+                                    <span className="text-xs text-gray-400">
+                                        Qo‘shilgan: {new Date(client.createdAt).toLocaleDateString('uz-UZ')}
+                                    </span>
                                 </div>
                             </div>
-
-                            {/* Stats */}
-                            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 p-6 bg-white border-b border-gray-200">
-                                <StatCard icon={DollarSign} label="Qarz" value={`${debt.toLocaleString()} $`} color="red" />
-                                <StatCard icon={CreditCard} label="To‘langan" value={`${totalPaid.toLocaleString()} $`} color="green" />
-                                <StatCard icon={ShoppingBag} label="Buyurtmalar soni" value={totalOrders} color="blue" />
-                                <StatCard
-                                    icon={Users}
-                                    label="Holati"
-                                    value={isDeleted ? 'O‘chirilgan' : 'Faol'}
-                                    color={isDeleted ? 'red' : 'green'}
-                                />
-                            </div>
-
-                            {/* Payment History - Excel style */}
-                            <div className="p-6">
-                                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-4">
-                                    To‘lovlar tarixi ({client.paymentHistory?.length || 0})
-                                </h3>
-                                {client.paymentHistory?.length === 0 ? (
-                                    <div className="text-center py-8 text-gray-400 text-sm">
-                                        <FileText className="w-10 h-10 mx-auto mb-2 text-gray-300" />
-                                        Hali to‘lovlar yo‘q
-                                    </div>
-                                ) : (
-                                    <div className="overflow-x-auto rounded-xl border border-gray-200">
-                                        <table className="w-full text-sm">
-                                            <thead className="bg-white border-b border-gray-200">
-                                                <tr>
-                                                    <th className="px-4 py-3 text-left font-medium text-gray-600">Sana</th>
-                                                    <th className="px-4 py-3 text-right font-medium text-gray-600">Summa ($)</th>
-                                                    <th className="px-4 py-3 text-left font-medium text-gray-600">Izoh</th>
-                                                    <th className="px-4 py-3 text-left font-medium text-gray-600">Qo‘shgan</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-gray-100">
-                                                {client.paymentHistory.map((payment, idx) => (
-                                                    <tr key={idx} className={`hover:bg-white transition ${idx % 2 === 0 ? 'bg-white' : 'bg-white/50'}`}>
-                                                        <td className="px-4 py-3 text-gray-600">
-                                                            {new Date(payment.date).toLocaleDateString('uz-UZ')}
-                                                        </td>
-                                                        <td className="px-4 py-3 text-right font-medium text-emerald-700">
-                                                            {payment.amount.toLocaleString()}
-                                                        </td>
-                                                        <td className="px-4 py-3 text-gray-500">{payment.note || '-'}</td>
-                                                        <td className="px-4 py-3 text-gray-500">{payment.user?.name || '-'}</td>
-                                                    </tr>
-                                                ))}
-                                                <tr className="bg-white font-semibold border-t-2 border-gray-200">
-                                                    <td colSpan="1" className="px-4 py-3 text-right text-gray-700">Jami:</td>
-                                                    <td className="px-4 py-3 text-right text-emerald-700">{totalPaid.toLocaleString()} $</td>
-                                                    <td colSpan="2"></td>
-                                                </tr>
-                                            </tbody>
-                                        </table>
-                                    </div>
+                            <div className="flex gap-2 flex-wrap">
+                                {!isDeleted && (
+                                    <button
+                                        onClick={() => openPaymentModal(client)}
+                                        className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
+                                    >
+                                        <CreditCard size={16} /> To‘lov qo‘shish
+                                    </button>
                                 )}
                             </div>
+                        </div>
 
-                            {/* Orders Table - Excel style */}
-                            {client.orders && client.orders.length > 0 && (
-                                <div className="px-6 pb-6">
-                                    <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-4">
-                                        Buyurtmalar ({client.orders.length})
-                                    </h3>
-                                    <div className="overflow-x-auto rounded-xl border border-gray-200">
-                                        <table className="w-full text-sm">
-                                            <thead className="bg-white border-b border-gray-200">
-                                                <tr>
-                                                    <th className="px-4 py-3 text-left font-medium text-gray-600">#</th>
-                                                    <th className="px-4 py-3 text-left font-medium text-gray-600">Sana</th>
-                                                    <th className="px-4 py-3 text-right font-medium text-gray-600">Summa ($)</th>
-                                                    <th className="px-4 py-3 text-left font-medium text-gray-600">Holat</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-gray-100">
-                                                {client.orders.map((order, idx) => (
-                                                    <tr key={order._id} className={`hover:bg-white transition ${idx % 2 === 0 ? 'bg-white' : 'bg-white/50'}`}>
-                                                        <td className="px-4 py-3 text-gray-600">{idx + 1}</td>
-                                                        <td className="px-4 py-3 text-gray-600">
-                                                            {new Date(order.createdAt).toLocaleDateString('uz-UZ')}
-                                                        </td>
-                                                        <td className="px-4 py-3 text-right font-medium text-gray-900">
-                                                            {order.orderTotal?.toLocaleString() || 0}
-                                                        </td>
-                                                        <td className="px-4 py-3">
-                                                            <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${order.status === 'completed'
-                                                                ? 'bg-green-100 text-green-700'
-                                                                : order.status === 'cancelled'
-                                                                    ? 'bg-red-100 text-red-700'
-                                                                    : 'bg-yellow-100 text-yellow-700'
-                                                                }`}>
-                                                                {order.status === 'pending' ? 'Kutilmoqda' : order.status === 'completed' ? 'Bajarilgan' : 'Bekor'}
-                                                            </span>
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                                <tr className="bg-white font-semibold border-t-2 border-gray-200">
-                                                    <td colSpan="2" className="px-4 py-3 text-right text-gray-700">Jami:</td>
-                                                    <td className="px-4 py-3 text-right text-emerald-700">
-                                                        {client.orders.reduce((sum, o) => sum + (o.orderTotal || 0), 0).toLocaleString()} $
+                        {/* Stats */}
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 p-6 bg-white border-b border-gray-200">
+                            <StatCard icon={DollarSign} label="Qarz" value={`${debt.toLocaleString()} $`} color="red" />
+                            <StatCard icon={CreditCard} label="To‘langan" value={`${totalPaid.toLocaleString()} $`} color="green" />
+                            <StatCard icon={ShoppingBag} label="Buyurtmalar soni" value={totalOrders} color="blue" />
+                            <StatCard
+                                icon={Users}
+                                label="Holati"
+                                value={isDeleted ? 'O‘chirilgan' : 'Faol'}
+                                color={isDeleted ? 'red' : 'green'}
+                            />
+                        </div>
+
+                        {/* Payment History - Excel style */}
+                        <div className="p-6">
+                            <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-4">
+                                To‘lovlar tarixi ({client.paymentHistory?.length || 0})
+                            </h3>
+                            {client.paymentHistory?.length === 0 ? (
+                                <div className="text-center py-8 text-gray-400 text-sm">
+                                    <FileText className="w-10 h-10 mx-auto mb-2 text-gray-300" />
+                                    Hali to‘lovlar yo‘q
+                                </div>
+                            ) : (
+                                <div className="overflow-x-auto rounded-xl border border-gray-200">
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-white border-b border-gray-200">
+                                            <tr>
+                                                <th className="px-4 py-3 text-left font-medium text-gray-600">Sana</th>
+                                                <th className="px-4 py-3 text-right font-medium text-gray-600">Summa ($)</th>
+                                                <th className="px-4 py-3 text-left font-medium text-gray-600">Izoh</th>
+                                                <th className="px-4 py-3 text-left font-medium text-gray-600">Qo‘shgan</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {client.paymentHistory.map((payment, idx) => (
+                                                <tr key={idx} className={`hover:bg-white transition ${idx % 2 === 0 ? 'bg-white' : 'bg-white/50'}`}>
+                                                    <td className="px-4 py-3 text-gray-600">
+                                                        {new Date(payment.date).toLocaleDateString('uz-UZ')}
                                                     </td>
-                                                    <td></td>
+                                                    <td className="px-4 py-3 text-right font-medium text-emerald-700">
+                                                        {payment.amount.toLocaleString()}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-gray-500">{payment.note || '-'}</td>
+                                                    <td className="px-4 py-3 text-gray-500">{payment.user?.name || '-'}</td>
                                                 </tr>
-                                            </tbody>
-                                        </table>
-                                    </div>
+                                            ))}
+                                            <tr className="bg-white font-semibold border-t-2 border-gray-200">
+                                                <td colSpan="1" className="px-4 py-3 text-right text-gray-700">Jami:</td>
+                                                <td className="px-4 py-3 text-right text-emerald-700">{totalPaid.toLocaleString()} $</td>
+                                                <td colSpan="2"></td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
                                 </div>
                             )}
+                        </div>
 
-                            <div className="px-6 py-4 border-t border-gray-200 bg-white/50 text-xs text-gray-400 flex flex-wrap justify-between gap-2">
-                                <span>ID: {client._id}</span>
-                                <span>Yangilangan: {new Date(client.updatedAt).toLocaleString('uz-UZ')}</span>
+                        {/* Orders Table - Excel style */}
+                        {client.orders && client.orders.length > 0 && (
+                            <div className="px-6 pb-6">
+                                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-4">
+                                    Buyurtmalar ({client.orders.length})
+                                </h3>
+                                <div className="overflow-x-auto rounded-xl border border-gray-200">
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-white border-b border-gray-200">
+                                            <tr>
+                                                <th className="px-4 py-3 text-left font-medium text-gray-600">#</th>
+                                                <th className="px-4 py-3 text-left font-medium text-gray-600">Sana</th>
+                                                <th className="px-4 py-3 text-right font-medium text-gray-600">Summa ($)</th>
+                                                <th className="px-4 py-3 text-left font-medium text-gray-600">Holat</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {client.orders.map((order, idx) => (
+                                                <tr key={order._id} className={`hover:bg-white transition ${idx % 2 === 0 ? 'bg-white' : 'bg-white/50'}`}>
+                                                    <td className="px-4 py-3 text-gray-600">{idx + 1}</td>
+                                                    <td className="px-4 py-3 text-gray-600">
+                                                        {new Date(order.createdAt).toLocaleDateString('uz-UZ')}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-right font-medium text-gray-900">
+                                                        {order.orderTotal?.toLocaleString() || 0}
+                                                    </td>
+                                                    <td className="px-4 py-3">
+                                                        <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${order.status === 'completed'
+                                                            ? 'bg-green-100 text-green-700'
+                                                            : order.status === 'cancelled'
+                                                                ? 'bg-red-100 text-red-700'
+                                                                : 'bg-yellow-100 text-yellow-700'
+                                                            }`}>
+                                                            {order.status === 'pending' ? 'Kutilmoqda' : order.status === 'completed' ? 'Bajarilgan' : 'Bekor'}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                            <tr className="bg-white font-semibold border-t-2 border-gray-200">
+                                                <td colSpan="2" className="px-4 py-3 text-right text-gray-700">Jami:</td>
+                                                <td className="px-4 py-3 text-right text-emerald-700">
+                                                    {client.orders.reduce((sum, o) => sum + (o.orderTotal || 0), 0).toLocaleString()} $
+                                                </td>
+                                                <td></td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
+                        )}
+
+                        <div className="px-6 py-4 border-t border-gray-200 bg-white/50 text-xs text-gray-400 flex flex-wrap justify-between gap-2">
+                            <span>ID: {client._id}</span>
+                            <span>Yangilangan: {new Date(client.updatedAt).toLocaleString('uz-UZ')}</span>
                         </div>
                     </div>
                 </div>
@@ -1100,7 +1146,7 @@ export const Clients = () => {
                                         type="number"
                                         name="debt"
                                         step="0.01"
-                                        // min="0"
+                                        min="0"
                                         value={form.debt}
                                         onChange={handleFormChange}
                                         className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none ${formErrors.debt ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
@@ -1243,134 +1289,3 @@ export const Clients = () => {
         </div>
     );
 };
-
-// ---------- Print styles ----------
-const printStyles = `
-  @media print {
-    body * {
-      visibility: hidden;
-    }
-    .print-content, .print-content * {
-      visibility: visible;
-    }
-    .print-content {
-      position: absolute;
-      left: 0;
-      top: 0;
-      width: 100%;
-      padding: 20px;
-    }
-    .print-hide {
-      display: none !important;
-    }
-    .print-content .bg-white {
-      background: white !important;
-      border: 1px solid #ddd !important;
-      box-shadow: none !important;
-    }
-    .print-content .border-gray-200 {
-      border-color: #ddd !important;
-    }
-    .print-content table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12px;
-    }
-    .print-content table th,
-    .print-content table td {
-      border: 1px solid #ddd;
-      padding: 6px 10px;
-      text-align: left;
-    }
-    .print-content table th {
-      background: #f3f4f6 !important;
-      font-weight: 600;
-      color: #1f2937;
-    }
-    .print-content table td.text-right {
-      text-align: right !important;
-    }
-    .print-content .bg-white {
-      background: #f9fafb !important;
-    }
-    .print-content .bg-gray-100 {
-      background: #f3f4f6 !important;
-    }
-    .print-content .bg-gray-200 {
-      background: #e5e7eb !important;
-    }
-    .print-content .p-6 {
-      padding: 16px !important;
-    }
-    .print-content .rounded-2xl {
-      border-radius: 0 !important;
-    }
-    .print-content .rounded-xl {
-      border-radius: 0 !important;
-    }
-    .print-content .shadow-sm,
-    .print-content .shadow-md {
-      box-shadow: none !important;
-    }
-    .print-content .text-emerald-700 {
-      color: #047857 !important;
-    }
-    .print-content .text-red-600 {
-      color: #dc2626 !important;
-    }
-    .print-content .text-gray-900 {
-      color: #111827 !important;
-    }
-    .print-content .text-gray-700 {
-      color: #374151 !important;
-    }
-    .print-content .font-semibold {
-      font-weight: 600 !important;
-    }
-    .print-content .font-bold {
-      font-weight: 700 !important;
-    }
-    .print-content .uppercase {
-      text-transform: uppercase !important;
-    }
-    .print-content .tracking-wider {
-      letter-spacing: 0.05em !important;
-    }
-      @page {
-      margin: 0.8cm;
-    }
-    
-    .print-content table {
-      page-break-inside: auto;
-    }
-    .print-content tr {
-      page-break-inside: avoid;
-    }
-    .print-content thead {
-      display: table-header-group;
-    }
-    
-    /* Jadval ichidagi padding va fontni kichraytirish */
-    .print-content td,
-    .print-content th {
-      padding: 4px 6px !important;
-      font-size: 10px !important;
-    }
-    .print-content .p-6 {
-      padding: 8px !important;
-    }
-    .print-content h1 {
-      font-size: 18px !important;
-    }
-    .print-content .text-sm {
-      font-size: 10px !important;
-    }
-  }
-`;
-
-if (!document.getElementById("print-style")) {
-    const style = document.createElement("style");
-    style.id = "print-style";
-    style.innerHTML = printStyles;
-    document.head.appendChild(style);
-}

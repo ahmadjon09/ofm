@@ -279,6 +279,224 @@ const AsyncSearchSelect = ({
   );
 };
 
+// ---------- Yordamchi: formatNumber ----------
+const formatNumber = (num, decimals = 2) => {
+  if (num === undefined || num === null) return '0';
+  return Number(num).toFixed(decimals);
+};
+
+// HTML-ga chiqarilayotgan matnni xavfsizlashtirish (mijoz nomi va h.k.)
+const escapeHtml = (value) => {
+  if (value === undefined || value === null) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
+
+// ============================================================
+// PRINT: buyurtmani A4 gorizontal, 2 ta bir xil nusxada chop etish
+// Alohida iframe hujjati sifatida quriladi — asosiy sahifa DOM/CSS'iga
+// bog'liq emas, shuning uchun har doim ishonchli va toza chiqadi.
+// ============================================================
+const buildOrderPrintHtml = (order) => {
+  const items = order.items || [];
+  const total = order.orderTotal || 0;
+  const totalBoxes = items.reduce((sum, it) => sum + (it.quantityBoxes || 0), 0);
+  const totalKg = items.reduce((sum, it) => sum + (it.quantityKg || 0), 0);
+  const orderNo = (order._id || '').slice(-6).toUpperCase();
+  const dateStr = order.createdAt ? new Date(order.createdAt).toLocaleDateString('uz-UZ') : '-';
+  const statusStr = STATUS_LABELS[order.status] || order.status || '-';
+  const clientName = escapeHtml(order.client?.name || 'Noma’lum');
+  const clientPhone = escapeHtml(order.client?.phone || '-');
+
+  const rowsHtml = items
+    .map((item, idx) => {
+      const kg = item.quantityKg || 0;
+      const price = item.pricePerKg || 0;
+      const subtotal = kg * price;
+      return `
+        <tr>
+          <td class="c">${idx + 1}</td>
+          <td>${escapeHtml(item.productCategory || item.productName || '-')}</td>
+          <td class="c">${escapeHtml(item.size ?? '-')}</td>
+          <td class="c">${item.quantityBoxes || 0}</td>
+          <td class="r">${kg}</td >
+          <td class="r">${formatNumber(price)}</td>
+          <td class="r">${formatNumber(subtotal)}</td>
+        </tr > `;
+    })
+    .join('');
+
+  const emptyRowsHtml = items.length === 0
+    ? `< tr > <td colspan="7" class="c empty">Mahsulotlar yo‘q</td></ > `
+    : '';
+
+  const oneCopyHtml = `
+  < section class="copy" >
+      <header class="head">
+        <h1>BUYURTMA №${orderNo}</h1>
+        <div class="meta-row">
+          <span><b>Mijoz:</b> ${clientName}</span>
+          <span><b>Sana:</b> ${dateStr}</span>
+        </div>
+        <div class="meta-row">
+          <span><b>Telefon:</b> ${clientPhone}</span>
+          <span><b>Holat:</b> ${escapeHtml(statusStr)}</span>
+        </div>
+      </header>
+
+      <table class="items">
+        <thead>
+          <tr>
+            <th style="width:6%">№</th>
+            <th style="width:30%">Mahsulot</th>
+            <th style="width:12%">O‘lcham</th>
+            <th style="width:10%">SHT</th>
+            <th style="width:12%">Kg</th>
+            <th style="width:14%">Narx (kg)</th>
+            <th style="width:16%">Summa</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}${emptyRowsHtml}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="3" class="r b">Jami:</td>
+            <td class="c b">${totalBoxes} SHT</td>
+            <td class="r b">${totalKg} kg</td>
+            <td></td>
+            <td class="r b">${formatNumber(total)} $</td>
+          </tr>
+        </tfoot>
+      </table>
+
+      <footer class="sign-row">
+        <div class="sign"><div class="sign-line"></div><span>Sotuvchi imzosi</span></div>
+        <div class="sign"><div class="sign-line"></div><span>Mijoz imzosi</span></div>
+      </footer>
+    </ > `;
+
+  return `< !DOCTYPE html >
+  <html lang="uz">
+    <head>
+      <meta charset="UTF-8" />
+      <title>Buyurtma ${orderNo}</title>
+      <style>
+        * {box - sizing: border-box; }
+        html, body {margin: 0; padding: 0; }
+        body {
+          font - family: "Segoe UI", Arial, Helvetica, sans-serif;
+        color: #111827;
+        font-size: 12px;
+  }
+        @page {size: A4 landscape; margin: 8mm; }
+
+        .page-wrapper {
+          display: flex;
+        align-items: stretch;
+        gap: 8mm;
+        width: 100%;
+  }
+        .copy {
+          flex: 1 1 0;
+        min-width: 0;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        padding: 6mm;
+        display: flex;
+        flex-direction: column;
+  }
+        .copy + .copy {
+          border - left: 2px dashed #94a3b8;
+  }
+
+        .head {
+          text - align: center;
+        border-bottom: 2px solid #111827;
+        padding-bottom: 6px;
+        margin-bottom: 8px;
+  }
+        .head h1 {
+          margin: 0 0 6px 0;
+        font-size: 17px;
+        letter-spacing: 0.4px;
+  }
+        .meta-row {
+          display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        margin: 2px 0;
+        color: #1f2937;
+  }
+
+        table.items {
+          width: 100%;
+        border-collapse: collapse;
+        font-size: 11px;
+        table-layout: fixed;
+  }
+        table.items th,
+        table.items td {
+          border: 1px solid #94a3b8;
+        padding: 5px 6px;
+        text-align: left;
+        word-break: break-word;
+  }
+        table.items thead th {
+          background: #f1f5f9;
+        font-weight: 700;
+        text-transform: uppercase;
+        font-size: 9.5px;
+        letter-spacing: 0.3px;
+        text-align: center;
+  }
+        table.items tbody tr:nth-child(even) {background: #f8fafc; }
+        table.items td.c {text - align: center; }
+        table.items td.r {text - align: right; }
+        table.items td.b {font - weight: 700; }
+        table.items td.empty {padding: 14px; color: #9ca3af; }
+        table.items tfoot td {
+          border - top: 2px solid #111827;
+        background: #f1f5f9;
+  }
+
+        .sign-row {
+          margin - top: auto;
+        padding-top: 16px;
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+  }
+        .sign {
+          flex: 1;
+        text-align: center;
+        font-size: 10.5px;
+        color: #374151;
+  }
+        .sign-line {
+          border - top: 1px solid #111827;
+        margin-bottom: 4px;
+        height: 26px;
+  }
+
+        @media print {
+    .page - wrapper {page -break-inside: avoid; }
+  }
+      </style>
+    </head>
+    <body>
+      <div class="page-wrapper">
+        ${oneCopyHtml}
+        ${oneCopyHtml}
+      </div>
+    </body>
+  </html>`;
+};
+
 // ============================================================
 // MAIN COMPONENT
 // ============================================================
@@ -305,7 +523,7 @@ export const Orders = () => {
     productSizes: [],
     size: '',
     price: '',
-    quantityBoxes: '', // changed from quantityKg to quantityBoxes
+    quantityBoxes: '',
   };
   const [createForm, setCreateForm] = useState({
     clientId: '',
@@ -324,7 +542,6 @@ export const Orders = () => {
   const [confirmState, setConfirmState] = useState(null);
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
-  const printRef = useRef(null);
 
   const showToast = useCallback((message, type = 'info') => {
     setToast({ message, type });
@@ -346,7 +563,7 @@ export const Orders = () => {
 
   // ---------- SWR for list ----------
   const { data, error, isLoading, isValidating, mutate } = useSWR(
-    `${ORDERS_URL}?${buildQuery()}`,
+    `${ORDERS_URL}?${buildQuery()} `,
     (url) => api.get(url).then((res) => res.data),
     { keepPreviousData: true, revalidateOnFocus: false }
   );
@@ -416,7 +633,7 @@ export const Orders = () => {
     const newItems = [...createForm.items];
     newItems[index] = { ...newItems[index], [field]: value };
     setCreateForm({ ...createForm, items: newItems });
-    setCreateErrors((prev) => ({ ...prev, [`item-${index}-${field}`]: undefined }));
+    setCreateErrors((prev) => ({ ...prev, [`item - ${index} -${field} `]: undefined }));
   };
 
   const handleItemProductSelect = (index, opt) => {
@@ -432,8 +649,8 @@ export const Orders = () => {
     setCreateForm({ ...createForm, items: newItems });
     setCreateErrors((prev) => ({
       ...prev,
-      [`item-${index}-productId`]: undefined,
-      [`item-${index}-size`]: undefined,
+      [`item - ${index} -productId`]: undefined,
+      [`item - ${index} -size`]: undefined,
     }));
   };
 
@@ -447,7 +664,7 @@ export const Orders = () => {
       price: item.price || (sizeEntry ? String(sizeEntry.price) : ''),
     };
     setCreateForm({ ...createForm, items: newItems });
-    setCreateErrors((prev) => ({ ...prev, [`item-${index}-size`]: undefined }));
+    setCreateErrors((prev) => ({ ...prev, [`item - ${index} -size`]: undefined }));
   };
 
   const addItemRow = () => {
@@ -469,13 +686,12 @@ export const Orders = () => {
     const errors = {};
     if (!createForm.clientId) errors.clientId = 'Mijoz tanlanishi shart.';
     createForm.items.forEach((item, i) => {
-      if (!item.productId) errors[`item-${i}-productId`] = 'Mahsulot tanlang.';
-      if (!item.size) errors[`item-${i}-size`] = 'O‘lcham tanlang.';
-      if (!item.price || Number(item.price) <= 0) errors[`item-${i}-price`] = 'Narx 0 dan katta bo‘lishi kerak.';
-      // validate quantityBoxes: integer > 0
+      if (!item.productId) errors[`item - ${i} -productId`] = 'Mahsulot tanlang.';
+      if (!item.size) errors[`item - ${i} -size`] = 'O‘lcham tanlang.';
+      if (!item.price || Number(item.price) <= 0) errors[`item - ${i} -price`] = 'Narx 0 dan katta bo‘lishi kerak.';
       const boxes = Number(item.quantityBoxes);
       if (!item.quantityBoxes || !Number.isInteger(boxes) || boxes <= 0) {
-        errors[`item-${i}-quantityBoxes`] = 'Qutilar soni musbat butun son bo‘lishi kerak.';
+        errors[`item - ${i} -quantityBoxes`] = 'SHTlar soni musbat butun son bo‘lishi kerak.';
       }
     });
     setCreateErrors(errors);
@@ -496,7 +712,7 @@ export const Orders = () => {
         productId: item.productId,
         size: Number(item.size),
         pricePerKg: Number(item.price),
-        quantityBoxes: Number(item.quantityBoxes), // send boxes instead of kg
+        quantityBoxes: Number(item.quantityBoxes),
       })),
     };
 
@@ -536,7 +752,7 @@ export const Orders = () => {
 
     setStatusSaving(true);
     try {
-      await api.patch(`${ORDERS_URL}/${statusOrder._id}/status`, { status: newStatus });
+      await api.patch(`${ORDERS_URL} /${statusOrder._id}/status`, { status: newStatus });
       showToast('Holat yangilandi.', 'success');
       await mutate();
       if (selectedOrder && selectedOrder._id === statusOrder._id) {
@@ -577,7 +793,7 @@ export const Orders = () => {
     'delete-order': {
       title: 'Buyurtmani o‘chirish',
       message: (p) =>
-        `${p.client?.name || 'Noma’lum mijoz'} uchun ${(p.orderTotal || 0).toLocaleString()} $ lik buyurtmani butunlay o‘chirishni tasdiqlaysizmi? Bu amalni orqaga qaytarib bo‘lmaydi.`,
+        `${p.client?.name || 'Noma’lum mijoz'} uchun ${formatNumber(p.orderTotal)} $ lik buyurtmani butunlay o‘chirishni tasdiqlaysizmi? Bu amalni orqaga qaytarib bo‘lmaydi.`,
       confirmLabel: 'Butunlay o‘chirish',
       danger: true,
     },
@@ -588,9 +804,52 @@ export const Orders = () => {
   const goToList = () => setSelectedOrder(null);
 
   // ---------- Print function ----------
+  // Asosiy oyna (window.print()) o'rniga alohida, ko'rinmas iframe ichida
+  // mustaqil HTML hujjat yaratiladi va o'sha yerdan chop etiladi. Shu tufayli
+  // ilova sahifasidagi boshqa elementlar/CSS chop etishga hech qanday ta'sir
+  // qilmaydi va natija har doim toza, kutilganidek chiqadi.
   const handlePrint = () => {
     if (!selectedOrder) return;
-    window.print();
+
+    const html = buildOrderPrintHtml(selectedOrder);
+
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(iframe);
+
+    const cleanup = () => {
+      if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+    };
+
+    const doc = iframe.contentWindow.document;
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    const triggerPrint = () => {
+      try {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      } catch (err) {
+        showToast('Chop etishda xatolik yuz berdi.', 'error');
+        cleanup();
+      }
+    };
+
+    // Rasmlar/shriftlar joylashib bo'lguncha kichik kechikish bilan chop etish
+    iframe.onload = () => setTimeout(triggerPrint, 80);
+
+    if (iframe.contentWindow) {
+      iframe.contentWindow.onafterprint = cleanup;
+    }
+    // Zaxira: agar onafterprint ishlamasa, iframe baribir tozalanadi
+    setTimeout(cleanup, 60000);
   };
 
   // ============================================================
@@ -599,6 +858,8 @@ export const Orders = () => {
   if (selectedOrder) {
     const order = selectedOrder;
     const total = order.orderTotal || 0;
+    const totalBoxes = order.items?.reduce((sum, item) => sum + (item.quantityBoxes || 0), 0) || 0;
+
 
     return (
       <div className="min-h-screen bg-white py-6 px-4 sm:px-6">
@@ -606,133 +867,133 @@ export const Orders = () => {
           <div className="flex items-center justify-between mb-6">
             <button
               onClick={goToList}
-              className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 transition print-hide"
+              className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 transition"
             >
               <ArrowLeft size={18} /> Buyurtmalar ro‘yxati
             </button>
             <button
               onClick={handlePrint}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg text-sm font-medium shadow-sm transition print-hide"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
             >
               <Printer size={18} /> Chop etish
             </button>
           </div>
 
-          {/* Printable content */}
-          <div ref={printRef} className="print-content">
-            <div className="bg-white rounded-2xl shadow-md border border-gray-200 overflow-hidden">
-              {/* Header */}
-              <div className="px-6 py-5 border-b border-gray-200 flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
-                    <ShoppingCart className="text-blue-600" size={28} />
-                    Buyurtma #{order._id.slice(-6)}
-                  </h1>
-                  <div className="flex items-center gap-3 mt-1 flex-wrap">
-                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
-                      <User size={14} />
-                      {order.client?.name || 'Noma’lum'}
-                    </span>
-                    <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[order.status]}`}>
-                      {STATUS_LABELS[order.status] || order.status}
-                    </span>
-                    <span className="text-xs text-gray-400">
-                      {new Date(order.createdAt).toLocaleDateString('uz-UZ')}
-                    </span>
-                  </div>
-                </div>
-                <div className="flex gap-2 flex-wrap print-hide">
-                  <button
-                    onClick={() => openStatusModal(order)}
-                    className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
-                  >
-                    <Pencil size={16} /> Holatni o‘zgartirish
-                  </button>
-                  <button
-                    onClick={() => requestDeleteOrder(order)}
-                    className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
-                  >
-                    <Trash2 size={16} /> O‘chirish
-                  </button>
+          {/* Screen view (non-printable) */}
+          <div className="bg-white rounded-2xl shadow-md border border-gray-200 overflow-hidden">
+            {/* Header */}
+            <div className="px-6 py-5 border-b border-gray-200 flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
+                  <ShoppingCart className="text-blue-600" size={28} />
+                  Buyurtma #{order._id.slice(-6)}
+                </h1>
+                <div className="flex items-center gap-3 mt-1 flex-wrap">
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
+                    <User size={14} />
+                    {order.client?.name || 'Noma’lum'}
+                  </span>
+                  <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[order.status]}`}>
+                    {STATUS_LABELS[order.status] || order.status}
+                  </span>
+                  <span className="text-xs text-gray-400">
+                    {new Date(order.createdAt).toLocaleDateString('uz-UZ')}
+                  </span>
                 </div>
               </div>
-
-              {/* Stats */}
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 p-6 bg-white border-b border-gray-200">
-                <StatCard icon={DollarSign} label="Jami summa" value={`${total.toLocaleString()} $`} color="green" />
-                <StatCard icon={Package} label="Mahsulotlar soni" value={order.items?.length || 0} color="blue" />
-                <StatCard
-                  icon={User}
-                  label="Mijoz"
-                  value={order.client?.name || 'Noma’lum'}
-                  color="purple"
-                />
-                <StatCard
-                  icon={DollarSign}
-                  label="Mijoz qarzi"
-                  value={order.client?.debt + " $" || '---'}
-                  color="purple"
-                />
+              <div className="flex gap-2 flex-wrap">
+                {/* <button
+                  onClick={() => openStatusModal(order)}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
+                >
+                  <Pencil size={16} /> Holatni o‘zgartirish
+                </button>
+                <button
+                  onClick={() => requestDeleteOrder(order)}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
+                >
+                  <Trash2 size={16} /> O‘chirish
+                </button> */}
               </div>
+            </div>
 
-              {/* Items table - Excel style */}
-              <div className="p-6">
-                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-4">
-                  Mahsulotlar ({order.items?.length || 0})
-                </h3>
-                {order.items?.length === 0 ? (
-                  <div className="text-center py-8 text-gray-400 text-sm">
-                    <FileText className="w-10 h-10 mx-auto mb-2 text-gray-300" />
-                    Mahsulotlar yo‘q
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto rounded-xl border border-gray-200">
-                    <table className="w-full text-sm">
-                      <thead className="bg-white border-b border-gray-200">
-                        <tr>
-                          <th className="px-4 py-3 text-left font-medium text-gray-600">Mahsulot</th>
-                          <th className="px-4 py-3 text-left font-medium text-gray-600">O‘lcham</th>
-                          <th className="px-4 py-3 text-right font-medium text-gray-600">Miqdor (kg)</th>
-                          <th className="px-4 py-3 text-right font-medium text-gray-600">Narx (kg / $)</th>
-                          <th className="px-4 py-3 text-right font-medium text-gray-600">Summa ($)</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {order.items.map((item, idx) => (
+            {/* Stats */}
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 p-6 bg-white border-b border-gray-200">
+              <StatCard icon={DollarSign} label="Jami summa" value={`${formatNumber(total)} $`} color="green" />
+              <StatCard icon={Package} label="Mahsulotlar soni" value={order.items?.length || 0} color="blue" />
+              <StatCard
+                icon={User}
+                label="Mijoz"
+                value={order.client?.name || 'Noma’lum'}
+                color="purple"
+              />
+              <StatCard
+                icon={DollarSign}
+                label="Mijoz qarzi"
+                value={`${formatNumber(order.client?.debt || 0)} $`}
+                color="purple"
+              />
+            </div>
+
+            {/* Items table */}
+            <div className="p-6">
+              <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-4">
+                Mahsulotlar ({order.items?.length || 0}) | Jami SHT: {totalBoxes}
+              </h3>
+              {order.items?.length === 0 ? (
+                <div className="text-center py-8 text-gray-400 text-sm">
+                  <FileText className="w-10 h-10 mx-auto mb-2 text-gray-300" />
+                  Mahsulotlar yo‘q
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-xl border border-gray-200">
+                  <table className="w-full text-sm">
+                    <thead className="bg-white border-b border-gray-200">
+                      <tr>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">Mahsulot</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">O‘lcham</th>
+                        <th className="px-4 py-3 text-center font-medium text-gray-600">SHT</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Miqdor (kg)</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Narx (kg / $)</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Summa ($)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {order.items.map((item, idx) => {
+                        const kg = item.quantityKg || 0;
+                        const price = item.pricePerKg || 0;
+                        const subtotal = kg * price;
+                        return (
                           <tr key={idx} className={`hover:bg-white transition ${idx % 2 === 0 ? 'bg-white' : 'bg-white/50'}`}>
                             <td className="px-4 py-3 font-medium text-gray-800">{item.productCategory}</td>
                             <td className="px-4 py-3 text-gray-600">{item.size}</td>
-                            <td className="px-4 py-3 text-right font-medium text-gray-800">
-                              {item.quantityKg}
-                            </td>
-                            <td className="px-4 py-3 text-right text-gray-600">
-                              {item.pricePerKg}
-                            </td>
-                            <td className="px-4 py-3 text-right font-medium text-emerald-700">
-                              {item.subtotal?.toLocaleString() || 0}
-                            </td>
+                            <td className="px-4 py-3 text-center font-medium text-gray-800">{item.quantityBoxes || 0}</td>
+                            <td className="px-4 py-3 text-right font-medium text-gray-800">{kg}</td>
+                            <td className="px-4 py-3 text-right text-gray-600">{formatNumber(price)}</td>
+                            <td className="px-4 py-3 text-right font-medium text-emerald-700">{formatNumber(subtotal)}</td>
                           </tr>
-                        ))}
-                        <tr className="bg-white font-semibold border-t-2 border-gray-200">
-                          <td colSpan="4" className="px-4 py-3 text-right text-gray-700">Jami:</td>
-                          <td className="px-4 py-3 text-right text-emerald-700">{total.toLocaleString()} $</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+                        );
+                      })}
+                      <tr className="bg-white font-semibold border-t-2 border-gray-200">
+                        <td colSpan="5" className="px-4 py-3 text-right text-gray-700">Jami:</td>
+                        <td className="px-4 py-3 text-right text-emerald-700">{formatNumber(total)} $</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
 
-              <div className="px-6 py-4 border-t border-gray-200 bg-white/50 text-xs text-gray-400 flex flex-wrap justify-between gap-2">
-                <span>ID: {order._id}</span>
-                <span>Yaratgan: {order.createdBy?.name || '-'}</span>
-                <span>Yangilangan: {new Date(order.updatedAt).toLocaleString('uz-UZ')}</span>
-              </div>
+            <div className="px-6 py-4 border-t border-gray-200 bg-white/50 text-xs text-gray-400 flex flex-wrap justify-between gap-2">
+              <span>ID: {order._id}</span>
+              <span>Yaratgan: {order.createdBy?.name || '-'}</span>
+              <span>Yangilangan: {new Date(order.updatedAt).toLocaleString('uz-UZ')}</span>
             </div>
           </div>
+
         </div>
 
-        {/* Modals are now rendered at the very end of the main component return */}
+        {/* Modals are rendered at the end of the component */}
       </div>
     );
   }
@@ -889,7 +1150,7 @@ export const Orders = () => {
                           </span>
                         </td>
                         <td className="px-4 py-4 text-right font-medium text-gray-900">
-                          {order.orderTotal?.toLocaleString() || 0}
+                          {formatNumber(order.orderTotal)}
                         </td>
                         <td className="px-4 py-4">
                           <div className="flex justify-end gap-1">
@@ -1038,7 +1299,7 @@ export const Orders = () => {
                               <option value="">Tanlang</option>
                               {sizes.map((s) => (
                                 <option key={s.size} value={s.size}>
-                                  {s.size} (quti: {s.boxes}, {s.total} kg mavjud)
+                                  {s.size} (SHT: {s.boxes}, {s.total} kg mavjud)
                                 </option>
                               ))}
                             </select>
@@ -1065,9 +1326,9 @@ export const Orders = () => {
                             )}
                           </div>
 
-                          {/* Quantity Boxes - changed from kg to boxes */}
+                          {/* Quantity Boxes */}
                           <div className="flex-1 min-w-[80px]">
-                            <label className="block text-xs text-gray-500 mb-0.5">Miqdor (quti)</label>
+                            <label className="block text-xs text-gray-500 mb-0.5">Miqdor (SHT)</label>
                             <input
                               type="number"
                               step="1"
@@ -1219,109 +1480,3 @@ export const Orders = () => {
     </div>
   );
 };
-
-// ---------- Print styles ----------
-const printStyles = `
-  @media print {
-    body * {
-      visibility: hidden;
-    }
-    .print-content, .print-content * {
-      visibility: visible;
-    }
-    .print-content {
-      position: absolute;
-      left: 0;
-      top: 0;
-      width: 100%;
-      padding: 20px;
-    }
-    .print-hide {
-      display: none !important;
-    }
-    .print-content .bg-white {
-      background: white !important;
-      border: 1px solid #ddd !important;
-      box-shadow: none !important;
-    }
-    .print-content .border-gray-200 {
-      border-color: #ddd !important;
-    }
-    .print-content table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12px;
-    }
-    .print-content table th,
-    .print-content table td {
-      border: 1px solid #ddd;
-      padding: 6px 10px;
-      text-align: left;
-    }
-    .print-content table th {
-      background: #f3f4f6 !important;
-      font-weight: 600;
-      color: #1f2937;
-    }
-    .print-content table td.text-right {
-      text-align: right !important;
-    }
-    .print-content .bg-white {
-      background: #f9fafb !important;
-    }
-    .print-content .bg-gray-100 {
-      background: #f3f4f6 !important;
-    }
-    .print-content .bg-gray-200 {
-      background: #e5e7eb !important;
-    }
-    .print-content .p-6 {
-      padding: 16px !important;
-    }
-    .print-content .rounded-2xl {
-      border-radius: 0 !important;
-    }
-    .print-content .rounded-xl {
-      border-radius: 0 !important;
-    }
-    .print-content .shadow-sm,
-    .print-content .shadow-md {
-      box-shadow: none !important;
-    }
-    .print-content .text-emerald-700 {
-      color: #047857 !important;
-    }
-    .print-content .text-red-600 {
-      color: #dc2626 !important;
-    }
-    .print-content .text-gray-900 {
-      color: #111827 !important;
-    }
-    .print-content .text-gray-700 {
-      color: #374151 !important;
-    }
-    .print-content .font-semibold {
-      font-weight: 600 !important;
-    }
-    .print-content .font-bold {
-      font-weight: 700 !important;
-    }
-    .print-content .uppercase {
-      text-transform: uppercase !important;
-    }
-    .print-content .tracking-wider {
-      letter-spacing: 0.05em !important;
-    }
-  }
-`;
-
-// Inject print styles once
-if (typeof document !== 'undefined') {
-  const existingStyle = document.getElementById('order-print-styles');
-  if (!existingStyle) {
-    const styleTag = document.createElement('style');
-    styleTag.id = 'order-print-styles';
-    styleTag.innerHTML = printStyles;
-    document.head.appendChild(styleTag);
-  }
-}

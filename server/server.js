@@ -422,6 +422,8 @@ const orderItemSchema = new mongoose.Schema(
         productName: { type: String, required: true },
         productCategory: { type: String },
         size: { type: Number, required: true },
+        quantityBoxes: { type: Number, required: true, min: 1 }, // qutilar (karobka) soni
+        boxKg: { type: Number, required: true, min: 0 }, // bitta quti necha kg (savdo vaqtidagi qiymat)
         quantityKg: { type: Number, required: true, min: 0.01 },
         pricePerKg: { type: Number, required: true, min: 0 },
         subtotal: { type: Number, default: 0 }, // auto = quantityKg * pricePerKg
@@ -445,6 +447,10 @@ const orderSchema = new mongoose.Schema(
             },
         },
         orderTotal: { type: Number, default: 0 },
+        // Jami ko'rsatkichlar — items massividan avtomatik hisoblanadi (pre('save') hook'da),
+        // shunda har safar frontendda/hisobotda qayta yig'indi chiqarishga hojat qolmaydi.
+        totalKg: { type: Number, default: 0 },       // barcha itemlar bo'yicha jami kg
+        totalBoxes: { type: Number, default: 0 },    // barcha itemlar bo'yicha jami quti (karobka) soni
         status: { type: String, enum: ['pending', 'completed', 'cancelled'], default: 'pending' },
         createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     },
@@ -460,6 +466,8 @@ orderSchema.pre('save', function calcOrderTotal(next) {
         item.subtotal = (item.quantityKg || 0) * (item.pricePerKg || 0);
     });
     this.orderTotal = this.items.reduce((sum, item) => sum + item.subtotal, 0);
+    this.totalKg = this.items.reduce((sum, item) => sum + (item.quantityKg || 0), 0);
+    this.totalBoxes = this.items.reduce((sum, item) => sum + (item.quantityBoxes || 0), 0);
     next();
 });
 
@@ -937,9 +945,10 @@ const orderController = {
                         productName: product.name,
                         productCategory: product.category,
                         size: sizeEntry.size,
+                        quantityBoxes,        // qutilar (karobka) soni — hisobotda KAR ustuni
+                        boxKg: sizeEntry.box_kg, // bitta quti necha kg (savdo vaqtidagi qiymat)
                         quantityKg,          // saqlanadigan kg miqdori
                         pricePerKg: finalPricePerKg,
-                        // quantityBoxes ni saqlash kerak bo‘lsa, bu yerga qo‘shish mumkin
                     });
                 }
 
@@ -1120,6 +1129,37 @@ const kassaController = {
         const updated = await kassaAddExpense(amount, { reason: String(reason).trim(), user: req.user._id });
 
         return sendSuccess(res, 200, "Chiqim muvaffaqiyatli yozildi.", { balance: updated.balance });
+    },
+
+    async income(req, res) {
+        const { amount, source } = req.body;
+
+        // 1. Validatsiya
+        if (!amount || amount <= 0) {
+            throw new ApiError(400, "Kirim summasi musbat son bo‘lishi shart.");
+        }
+        if (!source || !String(source).trim()) {
+            throw new ApiError(400, "Kirim manbasi (kimdan yoki nima uchun) kiritilishi shart.");
+        }
+
+        // 2. Kassani topib, balansni oshiramiz
+        const kassa = await getKassaDoc();
+        const updated = await kassaAddIncome(
+            amount,
+            {
+                source: String(source).trim(),
+                user: req.user._id,      // kim kiritgan
+                // agar client (mijoz) bog‘lash kerak bo‘lsa, req.body.clientId ham qo‘shing
+            }
+        );
+
+        // 3. Javob
+        return sendSuccess(
+            res,
+            200,
+            "Kirim muvaffaqiyatli yozildi.",
+            { balance: updated.balance }
+        );
     },
 };
 
@@ -1633,14 +1673,19 @@ async function fetchOrdersReportData({ start, end }) {
         (s, o) => s + o.items.reduce((si, it) => si + (it.quantityKg || 0), 0),
         0
     );
+    const totalBoxes = orders.reduce(
+        (s, o) => s + o.items.reduce((si, it) => si + (it.quantityBoxes || 0), 0),
+        0
+    );
 
-    return { orders, totalOrders, totalRevenue, completed, pending, cancelled, totalKg };
+    return { orders, totalOrders, totalRevenue, completed, pending, cancelled, totalKg, totalBoxes };
 }
 
 async function fetchStockReportData() {
     const products = await Product.find({}).sort({ category: 1, name: 1 }).lean({ virtuals: true });
     let totalKg = 0;
     let totalValue = 0;
+    let totalBoxes = 0;
     const rows = [];
 
     products.forEach((p) => {
@@ -1648,6 +1693,7 @@ async function fetchStockReportData() {
             const value = (s.total || 0) * (s.price || 0);
             totalKg += s.total || 0;
             totalValue += value;
+            totalBoxes += s.boxes || 0;
             rows.push({
                 product: p.name,
                 category: p.category,
@@ -1661,7 +1707,7 @@ async function fetchStockReportData() {
         });
     });
 
-    return { products, rows, totalKg, totalValue };
+    return { products, rows, totalKg, totalValue, totalBoxes };
 }
 
 async function fetchDebtsReportData() {
@@ -1671,11 +1717,64 @@ async function fetchDebtsReportData() {
     return { clients, debtors, totalDebt };
 }
 
+/**
+ * Bitta mijozning barcha buyurtmalari + to'lov tarixini yig'ib, oylarga
+ * guruhlaydi. Har oy: { key, monthName, year, items: [...], payments: [...] }.
+ * items va payments createdAt/date bo'yicha xronologik tartiblangan.
+ */
+async function fetchClientLedgerData(clientId) {
+    const client = await Client.findById(clientId).lean({ virtuals: true });
+    if (!client) throw new ApiError(404, 'Mijoz topilmadi.');
+
+    const orders = await Order.find({ client: clientId }).sort({ createdAt: 1 }).lean();
+
+    const monthsMap = new Map(); // key "YYYY-MM" -> { year, month, monthName, items:[], payments:[] }
+
+    function getBucket(date) {
+        const y = date.getFullYear();
+        const m = date.getMonth(); // 0-based
+        const key = `${y}-${String(m + 1).padStart(2, '0')}`;
+        if (!monthsMap.has(key)) {
+            monthsMap.set(key, { key, year: y, month: m + 1, monthName: UZ_MONTHS[m], items: [], payments: [] });
+        }
+        return monthsMap.get(key);
+    }
+
+    orders.forEach((order) => {
+        const bucket = getBucket(new Date(order.createdAt));
+        order.items.forEach((item) => {
+            bucket.items.push({
+                date: order.createdAt,
+                productName: item.productName,
+                size: item.size,
+                quantityBoxes: item.quantityBoxes != null ? item.quantityBoxes : null,
+                boxKg: item.boxKg != null ? item.boxKg : null,
+                quantityKg: item.quantityKg,
+                pricePerKg: item.pricePerKg,
+                subtotal: item.subtotal,
+            });
+        });
+    });
+
+    (client.paymentHistory || []).forEach((p) => {
+        const bucket = getBucket(new Date(p.date));
+        bucket.payments.push({
+            date: p.date,
+            amount: p.amount,
+            note: p.note || '',
+        });
+    });
+
+    const months = Array.from(monthsMap.values()).sort((a, b) => (a.key < b.key ? -1 : 1));
+
+    return { client, months };
+}
+
 // ---------------------------------------------------------------------------
 // EXCEL GENERATORLARI
 // ---------------------------------------------------------------------------
 
-async function buildOrdersExcel({ month, year, monthName, orders, totalOrders, totalRevenue, completed, pending, cancelled, totalKg }) {
+async function buildOrdersExcel({ month, year, monthName, orders, totalOrders, totalRevenue, completed, pending, cancelled, totalKg, totalBoxes }) {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Ombor va Savdo Boshqaruv Tizimi';
     workbook.created = new Date();
@@ -1687,18 +1786,22 @@ async function buildOrdersExcel({ month, year, monthName, orders, totalOrders, t
     styleExcelTitle(
         sheet,
         `BUYURTMALAR HISOBOTI — ${monthName.toUpperCase()} ${year}`,
-        `Jami buyurtmalar: ${totalOrders}  |  Jami summa: ${formatMoney(totalRevenue)} $  |  Jami: ${totalKg} kg  |  Bajarilgan: ${completed}  |  Kutilmoqda: ${pending}  |  Bekor qilingan: ${cancelled}`,
-        10
+        `Jami buyurtmalar: ${totalOrders}  |  Jami summa: ${formatMoney(totalRevenue)} $  |  Jami: ${totalBoxes} quti / ${totalKg} kg  |  Bajarilgan: ${completed}  |  Kutilmoqda: ${pending}  |  Bekor qilingan: ${cancelled}`,
+        11
     );
     sheet.addRow([]);
 
-    const headerRow = sheet.addRow(['№', 'Sana', 'Mijoz', 'Telefon', 'Mahsulot', "O'lcham", 'Miqdor (kg)', 'Narx/kg', 'Summa', 'Status']);
+    const headerRow = sheet.addRow(['№', 'Sana', 'Mijoz', 'Telefon', 'Mahsulot', "O'lcham", 'Quti (dona)', "1 quti (kg)", 'Miqdor (kg)', 'Narx/kg', 'Summa', 'Status']);
     styleExcelHeaderRow(headerRow);
 
+    const firstDataRow = sheet.rowCount + 1;
     let orderIndex = 0;
     orders.forEach((order) => {
         orderIndex += 1;
         order.items.forEach((item, i) => {
+            const r = sheet.rowCount + 1;
+            // Eski (boxKg qo'shilishidan oldingi) buyurtmalarda quti ma'lumoti bo'lmasligi mumkin.
+            const hasBoxData = item.quantityBoxes != null && item.boxKg != null;
             const row = sheet.addRow([
                 i === 0 ? orderIndex : '',
                 i === 0 ? new Date(order.createdAt).toLocaleDateString('uz-UZ') : '',
@@ -1706,28 +1809,42 @@ async function buildOrdersExcel({ month, year, monthName, orders, totalOrders, t
                 i === 0 ? (order.client?.phone || '—') : '',
                 item.productName,
                 item.size,
-                item.quantityKg,
-                formatMoney(item.pricePerKg),
-                formatMoney(item.subtotal),
+                hasBoxData ? item.quantityBoxes : '',
+                hasBoxData ? item.boxKg : '',
+                hasBoxData ? { formula: `G${r}*H${r}` } : item.quantityKg,
+                item.pricePerKg,
+                { formula: `I${r}*J${r}` },
                 i === 0 ? (STATUS_LABELS_UZ[order.status] || order.status) : '',
             ]);
+            row.getCell(9).numFmt = '#,##0.00';
+            row.getCell(10).numFmt = '#,##0';
+            row.getCell(11).numFmt = '#,##0';
             stripeExcelRow(row, orderIndex);
         });
     });
+    const lastDataRow = sheet.rowCount;
 
     sheet.addRow([]);
-    const totalRow = sheet.addRow(['', '', '', '', '', '', 'JAMI (kg):', totalKg, `${formatMoney(totalRevenue)} $`, '']);
+    const totalRowNum = sheet.rowCount + 1;
+    const totalRow = sheet.addRow([
+        '', '', '', '', '', '', { formula: `SUM(G${firstDataRow}:G${lastDataRow})` }, 'JAMI:',
+        { formula: `SUM(I${firstDataRow}:I${lastDataRow})` }, '',
+        { formula: `SUM(K${firstDataRow}:K${lastDataRow})` }, '',
+    ]);
     totalRow.font = { bold: true };
+    sheet.getCell(`I${totalRowNum}`).numFmt = '#,##0.00';
+    sheet.getCell(`K${totalRowNum}`).numFmt = '#,##0';
 
     sheet.columns = [
         { width: 5 }, { width: 12 }, { width: 22 }, { width: 15 },
-        { width: 22 }, { width: 9 }, { width: 12 }, { width: 13 }, { width: 15 }, { width: 14 },
+        { width: 22 }, { width: 9 }, { width: 11 }, { width: 11 },
+        { width: 12 }, { width: 11 }, { width: 15 }, { width: 14 },
     ];
 
     return workbook;
 }
 
-async function buildStockExcel({ rows, totalKg, totalValue }) {
+async function buildStockExcel({ rows, totalKg, totalValue, totalBoxes }) {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Ombor va Savdo Boshqaruv Tizimi';
     workbook.created = new Date();
@@ -1736,27 +1853,43 @@ async function buildStockExcel({ rows, totalKg, totalValue }) {
     styleExcelTitle(
         sheet,
         "OMBORDAGI MAHSULOTLAR QOLDIG'I",
-        `Jami og'irlik: ${totalKg} kg  |  Jami qiymat: ${formatMoney(totalValue)} $  |  Sana: ${new Date().toLocaleDateString('uz-UZ')}`,
+        `Jami: ${totalBoxes} quti / ${totalKg} kg  |  Jami qiymat: ${formatMoney(totalValue)} $  |  Sana: ${new Date().toLocaleDateString('uz-UZ')}`,
         8
     );
     sheet.addRow([]);
 
-    const headerRow = sheet.addRow(['№', 'Mahsulot', 'Kategoriya', "O'lcham", 'Karobka soni', 'Karobka (kg)', 'Jami (kg)', 'Qiymat (so\'m)']);
+    const headerRow = sheet.addRow(['№', 'Mahsulot', 'Kategoriya', "O'lcham", 'Quti (dona)', "1 quti (kg)", 'Jami (kg)', 'Qiymat ($)']);
     styleExcelHeaderRow(headerRow);
 
+    const firstDataRow = sheet.rowCount + 1;
     rows.forEach((r, idx) => {
+        const rn = sheet.rowCount + 1;
         const row = sheet.addRow([
-            idx + 1, r.product, r.category, r.size, r.boxes, r.boxKg, r.totalKg, formatMoney(r.value),
+            idx + 1, r.product, r.category, r.size, r.boxes, r.boxKg,
+            { formula: `E${rn}*F${rn}` }, { formula: `G${rn}*H${rn}` },
         ]);
+        // Narx (r.price) yashirin holda H ustunidan keyin kerak — value = totalKg*price,
+        // shu sabab qiymatni to'g'ridan-to'g'ri formuladan emas, narx orqali hisoblaymiz:
+        row.getCell(8).value = { formula: `G${rn}*${r.price || 0}` };
+        row.getCell(7).numFmt = '#,##0.00';
+        row.getCell(8).numFmt = '#,##0';
         stripeExcelRow(row, idx + 1);
     });
+    const lastDataRow = sheet.rowCount;
 
     sheet.addRow([]);
-    const totalRow = sheet.addRow(['', '', '', '', '', 'JAMI:', totalKg, formatMoney(totalValue)]);
+    const totalRowNum = sheet.rowCount + 1;
+    const totalRow = sheet.addRow([
+        '', '', '', '', { formula: `SUM(E${firstDataRow}:E${lastDataRow})` }, 'JAMI:',
+        { formula: `SUM(G${firstDataRow}:G${lastDataRow})` },
+        { formula: `SUM(H${firstDataRow}:H${lastDataRow})` },
+    ]);
     totalRow.font = { bold: true };
+    sheet.getCell(`G${totalRowNum}`).numFmt = '#,##0.00';
+    sheet.getCell(`H${totalRowNum}`).numFmt = '#,##0';
 
     sheet.columns = [
-        { width: 5 }, { width: 24 }, { width: 16 }, { width: 10 }, { width: 14 }, { width: 14 }, { width: 13 }, { width: 16 },
+        { width: 5 }, { width: 24 }, { width: 16 }, { width: 10 }, { width: 12 }, { width: 12 }, { width: 13 }, { width: 16 },
     ];
 
     return workbook;
@@ -1776,7 +1909,7 @@ async function buildDebtsExcel({ debtors, totalDebt }) {
     );
     sheet.addRow([]);
 
-    const headerRow = sheet.addRow(['№', 'Mijoz', 'Telefon', 'Jami buyurtma', "Jami to'langan", 'Qarz (so\'m)']);
+    const headerRow = sheet.addRow(['№', 'Mijoz', 'Telefon', 'Jami buyurtma', "Jami to'langan", 'Qarz ($)']);
     styleExcelHeaderRow(headerRow);
 
     debtors.forEach((c, idx) => {
@@ -1798,101 +1931,455 @@ async function buildDebtsExcel({ debtors, totalDebt }) {
     return workbook;
 }
 
+/**
+ * Bitta varaqda bo'lim sarlavhasi chizuvchi yordamchi — SummaryExcel uchun.
+ * Har chaqiriqda joriy oxirgi qatordan pastroqqa yangi bo'lim boshlaydi,
+ * shu bilan bir nechta workbook/worksheet o'rniga faqat BITTA varaq ishlatiladi.
+ */
+function addSummarySection(sheet, title, colSpan) {
+    sheet.addRow([]);
+    const r = sheet.rowCount + 1;
+    sheet.mergeCells(r, 1, r, colSpan);
+    const cell = sheet.getCell(r, 1);
+    cell.value = title;
+    cell.font = { size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.alignment = { vertical: 'middle', horizontal: 'left' };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${REPORT_COLORS.headerBg}` } };
+    sheet.getRow(r).height = 20;
+    sheet.addRow([]);
+}
+
+/**
+ * Umumiy oylik hisobot — barcha bo'limlar (umumiy ko'rsatkichlar, buyurtmalar,
+ * ombor qoldig'i, mijozlar qarzi) BITTA varaqda, bo'lim-bo'lim pastga qarab
+ * joylashtiriladi. Eski versiyada har bo'lim alohida worksheet edi va bu
+ * hisobot bir necha marta yaratilganda varaqlar sonining ortib ketishiga
+ * (2, 4, 8...) sabab bo'lardi — endi doim bitta workbook, bitta varaq.
+ */
 async function buildSummaryExcel({ month, year, monthName, ordersData, stockData, debtsData, kassaBalance }) {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Ombor va Savdo Boshqaruv Tizimi';
     workbook.created = new Date();
 
-    // --- 1-sheet: umumiy ko'rsatkichlar ---
-    const overview = workbook.addWorksheet('Umumiy');
-    styleExcelTitle(overview, `OYLIK UMUMIY HISOBOT — ${monthName.toUpperCase()} ${year}`, null, 4);
-    overview.addRow([]);
+    const sheet = workbook.addWorksheet(`Hisobot_${monthName}_${year}`.slice(0, 31));
+    const COL_SPAN = 10;
+
+    styleExcelTitle(sheet, `OYLIK UMUMIY HISOBOT — ${monthName.toUpperCase()} ${year}`, `Yaratilgan sana: ${new Date().toLocaleDateString('uz-UZ')}`, COL_SPAN);
+
+    // --- Bo'lim 1: umumiy ko'rsatkichlar ---
+    addSummarySection(sheet, "1. UMUMIY KO'RSATKICHLAR", COL_SPAN);
     const kv = [
         ['Jami buyurtmalar soni', ordersData.totalOrders],
         ['Jami savdo summasi', `${formatMoney(ordersData.totalRevenue)} $`],
-        ['Sotilgan (kg)', `${ordersData.totalKg} kg`],
+        ['Sotilgan', `${ordersData.totalBoxes} quti / ${ordersData.totalKg} kg`],
         ['Bajarilgan buyurtmalar', ordersData.completed],
         ['Kutilayotgan buyurtmalar', ordersData.pending],
         ['Bekor qilingan buyurtmalar', ordersData.cancelled],
-        ['Ombordagi jami qoldiq', `${stockData.totalKg} kg`],
+        ['Ombordagi jami qoldiq', `${stockData.totalBoxes} quti / ${stockData.totalKg} kg`],
         ['Ombordagi jami qiymat', `${formatMoney(stockData.totalValue)} $`],
         ["Mijozlarning jami qarzi", `${formatMoney(debtsData.totalDebt)} $`],
         ['Qarzdor mijozlar soni', debtsData.debtors.length],
         ['Kassadagi joriy balans', `${formatMoney(kassaBalance)} $`],
     ];
     kv.forEach(([label, value], idx) => {
-        const row = overview.addRow([label, value]);
+        const row = sheet.addRow([label, value]);
         row.getCell(1).font = { bold: true };
         stripeExcelRow(row, idx);
     });
-    overview.columns = [{ width: 32 }, { width: 26 }];
 
-    // --- 2-sheet: buyurtmalar ---
-    const ordersSheet = workbook.addWorksheet('Buyurtmalar');
-    styleExcelTitle(ordersSheet, `Buyurtmalar — ${monthName} ${year}`, null, 10);
-    ordersSheet.addRow([]);
-    const ordersHeader = ordersSheet.addRow(['№', 'Sana', 'Mijoz', 'Telefon', 'Mahsulot', "O'lcham", 'Miqdor (kg)', 'Narx/kg', 'Summa', 'Status']);
+    // --- Bo'lim 2: buyurtmalar ---
+    addSummarySection(sheet, `2. BUYURTMALAR — ${monthName.toUpperCase()} ${year}`, COL_SPAN);
+    const ordersHeader = sheet.addRow(['№', 'Sana', 'Mijoz', 'Telefon', 'Mahsulot', "O'lcham", 'Quti', 'Miqdor (kg)', 'Narx/kg', 'Summa', 'Status']);
     styleExcelHeaderRow(ordersHeader);
     let oi = 0;
     ordersData.orders.forEach((order) => {
         oi += 1;
         order.items.forEach((item, i) => {
-            const row = ordersSheet.addRow([
+            const row = sheet.addRow([
                 i === 0 ? oi : '',
                 i === 0 ? new Date(order.createdAt).toLocaleDateString('uz-UZ') : '',
                 i === 0 ? (order.client?.name || '—') : '',
                 i === 0 ? (order.client?.phone || '—') : '',
-                item.productName, item.size, item.quantityKg,
+                item.productName, item.size,
+                item.quantityBoxes != null ? item.quantityBoxes : '',
+                item.quantityKg,
                 formatMoney(item.pricePerKg), formatMoney(item.subtotal),
                 i === 0 ? (STATUS_LABELS_UZ[order.status] || order.status) : '',
             ]);
             stripeExcelRow(row, oi);
         });
     });
-    ordersSheet.columns = [
-        { width: 5 }, { width: 12 }, { width: 22 }, { width: 15 },
-        { width: 22 }, { width: 9 }, { width: 12 }, { width: 13 }, { width: 15 }, { width: 14 },
-    ];
 
-    // --- 3-sheet: ombor qoldig'i ---
-    const stockSheet = workbook.addWorksheet('Ombor qoldig`i');
-    styleExcelTitle(stockSheet, "Ombordagi mahsulotlar qoldig'i", `Jami: ${stockData.totalKg} kg  |  ${formatMoney(stockData.totalValue)} $`, 8);
-    stockSheet.addRow([]);
-    const stockHeader = stockSheet.addRow(['№', 'Mahsulot', 'Kategoriya', "O'lcham", 'Karobka soni', 'Karobka (kg)', 'Jami (kg)', 'Qiymat']);
+    // --- Bo'lim 3: ombor qoldig'i ---
+    addSummarySection(sheet, "3. OMBORDAGI MAHSULOTLAR QOLDIG'I", COL_SPAN);
+    const stockHeader = sheet.addRow(['№', 'Mahsulot', 'Kategoriya', "O'lcham", 'Quti (dona)', "1 quti (kg)", 'Jami (kg)', 'Qiymat']);
     styleExcelHeaderRow(stockHeader);
     stockData.rows.forEach((r, idx) => {
-        const row = stockSheet.addRow([idx + 1, r.product, r.category, r.size, r.boxes, r.boxKg, r.totalKg, formatMoney(r.value)]);
+        const row = sheet.addRow([idx + 1, r.product, r.category, r.size, r.boxes, r.boxKg, r.totalKg, formatMoney(r.value)]);
         stripeExcelRow(row, idx + 1);
     });
-    stockSheet.columns = [
-        { width: 5 }, { width: 24 }, { width: 16 }, { width: 10 }, { width: 14 }, { width: 14 }, { width: 13 }, { width: 16 },
-    ];
 
-    // --- 4-sheet: mijozlar qarzi ---
-    const debtsSheet = workbook.addWorksheet('Mijozlar qarzi');
-    styleExcelTitle(debtsSheet, "Mijozlarning qarzdorligi", `Jami qarz: ${formatMoney(debtsData.totalDebt)} $`, 5);
-    debtsSheet.addRow([]);
-    const debtsHeader = debtsSheet.addRow(['№', 'Mijoz', 'Telefon', 'Jami buyurtma', 'Qarz (so\'m)']);
+    // --- Bo'lim 4: mijozlar qarzi ---
+    addSummarySection(sheet, "4. MIJOZLARNING QARZDORLIGI", COL_SPAN);
+    const debtsHeader = sheet.addRow(['№', 'Mijoz', 'Telefon', 'Jami buyurtma', 'Qarz ($)']);
     styleExcelHeaderRow(debtsHeader);
     debtsData.debtors.forEach((c, idx) => {
-        const row = debtsSheet.addRow([idx + 1, c.name, c.phone, (c.orders || []).length, formatMoney(c.debt)]);
+        const row = sheet.addRow([idx + 1, c.name, c.phone, (c.orders || []).length, formatMoney(c.debt)]);
         stripeExcelRow(row, idx + 1);
     });
-    debtsSheet.columns = [{ width: 5 }, { width: 24 }, { width: 16 }, { width: 14 }, { width: 16 }];
+
+    sheet.columns = [
+        { width: 5 }, { width: 22 }, { width: 22 }, { width: 15 },
+        { width: 22 }, { width: 9 }, { width: 9 }, { width: 12 }, { width: 12 }, { width: 15 },
+    ];
 
     return workbook;
+}
+
+/**
+ * Mijoz jurnal-hisoboti — TORABEK misolidagi kabi: har oy uchun bitta blok
+ * (REZBA/SIZE/KAR/KLI/KG/NARH/SUMMA jadvali + to'lovlar ustuni), bloklar
+ * bitta varaqda pastma-past ketadi. Har oyning "OST" (o'tgan oydan qolgan
+ * qarz) qatori avvalgi oyning "QARZINGIZ" formulasiga bog'lanadi — shu bilan
+ * qarz avtomatik oydan-oyga o'tkazib boriladi.
+ *
+ * Ustunlar: A=Sana(to'lov qatorida)  B=REZBA  C=SIZE  D=KAR(quti)
+ *           E=KLI(1 quti kg)  F=KG(=D*E)  G=NARH  H=SUMMA(=F*G)
+ *           J=to'lov SUMMA  K=KIMGA  L=SANA
+ */
+// ---- rasmdagi ranglar palitrasi -----------------------------------------
+const COLORS = {
+    frameOlive: 'FF9E9662',     // tashqi "ramka" foni (xaki/zaytun)
+    monthHeaderBg: 'FF000000',  // MART / MAY / IYUN / IYUL bloki foni
+    monthHeaderFg: 'FFFFFFFF',
+    yearBg: 'FF00B050',         // 2026 katakchasi
+    yearFg: 'FFFFFFFF',
+    kimgaHeaderBg: 'FF4472C4',  // SUMMA / KIMGA / SANA ustun sarlavhasi
+    kimgaHeaderFg: 'FFFFFFFF',
+    dateBadgeBlue: 'FFBDD7EE',  // 24-Mar, 03-Jul kabi teg — ko'k
+    dateBadgeYellow: 'FFFFFF00',// 12-May, 25-Jul kabi teg — sariq
+    yangiBg: 'FFFFFF00',        // YANGI qatori
+    ostFg: 'FFFF0000',          // OST — qizil matn
+    jamiBg: 'FF00B0F0',         // JAMI qatori — moviy fon
+    qarzFg: 'FF0070C0',         // "QARZINGIZ" so'zi — moviy
+    qarzAmountFg: 'FFFF0000',   // qarz summasi — qizil, katta
+    white: 'FFFFFFFF',
+    black: 'FF000000',
+};
+
+function argb(hex) {
+    return { argb: hex };
+}
+
+// -- jadval chiziqlari (nozik, kulrang) --
+const THIN_BORDER = {
+    top: { style: 'thin', color: argb('FFB2B2B2') },
+    left: { style: 'thin', color: argb('FFB2B2B2') },
+    bottom: { style: 'thin', color: argb('FFB2B2B2') },
+    right: { style: 'thin', color: argb('FFB2B2B2') },
+};
+const THICK_BORDER = {
+    top: { style: 'medium', color: argb(COLORS.black) },
+    left: { style: 'medium', color: argb(COLORS.black) },
+    bottom: { style: 'medium', color: argb(COLORS.black) },
+    right: { style: 'medium', color: argb(COLORS.black) },
+};
+
+function colIdx(letters) {
+    return letters.split('').reduce((n, ch) => n * 26 + (ch.charCodeAt(0) - 64), 0);
+}
+function colLetter(n) {
+    let s = '';
+    while (n > 0) {
+        const m = (n - 1) % 26;
+        s = String.fromCharCode(65 + m) + s;
+        n = Math.floor((n - m) / 26);
+    }
+    return s;
+}
+function applyBorder(sheet, range, border) {
+    const [start, end] = range.split(':');
+    const startCol = start.match(/[A-Z]+/)[0];
+    const startRow = parseInt(start.match(/\d+/)[0], 10);
+    const endCol = end.match(/[A-Z]+/)[0];
+    const endRow = parseInt(end.match(/\d+/)[0], 10);
+    for (let r = startRow; r <= endRow; r += 1) {
+        for (let ci = colIdx(startCol); ci <= colIdx(endCol); ci += 1) {
+            sheet.getCell(`${colLetter(ci)}${r}`).border = border;
+        }
+    }
+}
+
+function buildClientLedgerExcel({ client, months }) {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Ombor va Savdo Boshqaruv Tizimi';
+    workbook.created = new Date();
+
+    const sheetName = `${client.name}`.replace(/[\\/*?:[\]]/g, ' ').slice(0, 31) || 'Mijoz';
+    const sheet = workbook.addWorksheet(sheetName, {
+        views: [{ showGridLines: false }],
+    });
+
+    sheet.columns = [
+        { width: 12 },  // A - sana / №
+        { width: 12 },  // B - rezba
+        { width: 8 },   // C - size
+        { width: 8 },   // D - kar (quti)
+        { width: 9 },   // E - kli (1 quti kg)
+        { width: 10 },  // F - kg
+        { width: 8 },   // G - narx
+        { width: 12 },  // H - summa
+        { width: 3 },   // I - bo'sh ajratuvchi
+        { width: 12 },  // J - to'lov summa
+        { width: 16 },  // K - kimga / qarzingiz
+        { width: 12 },  // L - sana
+    ];
+
+    const ALL_COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'];
+    const LEFT_COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+    const RIGHT_COLS = ['J', 'K', 'L'];
+
+    let prevDebtCell = null; // avvalgi oyning "QARZINGIZ" (K-ustun) hujayra manzili
+
+    months.forEach((bucket) => {
+        const blockStartRow = sheet.rowCount + 1;
+
+        // ================= 1) OY SARLAVHASI (MART / 2026) =================
+        const titleRow = sheet.rowCount + 1;
+        sheet.getCell(`B${titleRow}`).value = bucket.monthName.toUpperCase();
+        sheet.getCell(`B${titleRow}`).font = { bold: true, size: 12, color: argb(COLORS.monthHeaderFg) };
+        sheet.getCell(`B${titleRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: argb(COLORS.monthHeaderBg) };
+        sheet.getCell(`B${titleRow}`).alignment = { horizontal: 'center', vertical: 'middle' };
+
+        sheet.getCell(`C${titleRow}`).value = bucket.year;
+        sheet.getCell(`C${titleRow}`).font = { bold: true, size: 12, color: argb(COLORS.yearFg) };
+        sheet.getCell(`C${titleRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: argb(COLORS.yearBg) };
+        sheet.getCell(`C${titleRow}`).alignment = { horizontal: 'center', vertical: 'middle' };
+        applyBorder(sheet, `B${titleRow}:C${titleRow}`, THIN_BORDER);
+        applyBorder(sheet, `J${titleRow}:L${titleRow}`, THIN_BORDER);
+
+        // KIMGA blokining sarlavha satri (rasmda ko'k chiziq, SUMMA/KIMGA/SANA
+        // ustunlari uchun)
+        RIGHT_COLS.forEach((col) => {
+            const c = sheet.getCell(`${col}${titleRow}`);
+            c.fill = { type: 'pattern', pattern: 'solid', fgColor: argb(COLORS.kimgaHeaderBg) };
+        });
+
+        // ================= 2) USTUN SARLAVHALARI =================
+        const headerRow = sheet.rowCount + 1;
+        sheet.getCell(`A${headerRow}`).value = '№';
+        sheet.getCell(`B${headerRow}`).value = 'REZBA';
+        sheet.getCell(`C${headerRow}`).value = 'SIZE';
+        sheet.getCell(`D${headerRow}`).value = 'KAR';
+        sheet.getCell(`E${headerRow}`).value = 'KLI';
+        sheet.getCell(`F${headerRow}`).value = 'KG';
+        sheet.getCell(`G${headerRow}`).value = 'NARH';
+        sheet.getCell(`H${headerRow}`).value = 'SUMMA';
+        sheet.getCell(`J${headerRow}`).value = 'SUMMA';
+        sheet.getCell(`K${headerRow}`).value = 'KIMGA';
+        sheet.getCell(`L${headerRow}`).value = 'SANA';
+        ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L'].forEach((col) => {
+            const c = sheet.getCell(`${col}${headerRow}`);
+            c.font = { bold: true };
+            c.alignment = { horizontal: 'center' };
+            c.fill = { type: 'pattern', pattern: 'solid', fgColor: argb('FFD9D9D9') };
+        });
+        applyBorder(sheet, `A${headerRow}:H${headerRow}`, THIN_BORDER);
+        applyBorder(sheet, `J${headerRow}:L${headerRow}`, THIN_BORDER);
+
+        // ================= 3) MAHSULOT / TO'LOV QATORLARI =================
+        const dataStartRow = sheet.rowCount + 1;
+
+        // -- items ni sana bo'yicha guruhlash (ketma-ket kelgan bir xil
+        //    sanalar bitta guruh hisoblanadi, rasmdagi kabi) --
+        const groups = [];
+        (bucket.items || []).forEach((item) => {
+            const key = item.date || 'SANASIZ';
+            const last = groups[groups.length - 1];
+            if (last && last.key === key) {
+                last.items.push(item);
+            } else {
+                groups.push({ key, items: [item] });
+            }
+        });
+        if (groups.length === 0) groups.push({ key: null, items: [] });
+
+        // payments alohida, o'ng tomonda ketma-ket yoziladi (sana bilan bog'liq
+        // emas — ular o'z L-ustunidagi sanasi bilan ko'rsatiladi)
+        const payments = bucket.payments || [];
+        let paymentIdx = 0;
+
+        let badgeToggle = 0; // 0 -> ko'k, 1 -> sariq (rasmdagi kabi navbatlashadi)
+
+        groups.forEach((group) => {
+            const groupStartRow = sheet.rowCount + 1;
+
+            group.items.forEach((item) => {
+                const r = sheet.rowCount + 1;
+                const hasBoxData = item.quantityBoxes != null && item.boxKg != null;
+                sheet.getCell(`B${r}`).value = item.productName;
+                sheet.getCell(`C${r}`).value = item.size;
+                if (hasBoxData) {
+                    sheet.getCell(`D${r}`).value = item.quantityBoxes;
+                    sheet.getCell(`E${r}`).value = item.boxKg;
+                    sheet.getCell(`F${r}`).value = { formula: `E${r}*D${r}` };
+                } else {
+                    sheet.getCell(`F${r}`).value = item.quantityKg;
+                }
+                sheet.getCell(`G${r}`).value = item.pricePerKg;
+                sheet.getCell(`H${r}`).value = { formula: `F${r}*G${r}` };
+                sheet.getCell(`F${r}`).numFmt = '#,##0.00';
+                sheet.getCell(`H${r}`).numFmt = '#,##0.00';
+                applyBorder(sheet, `A${r}:H${r}`, THIN_BORDER);
+                ['C', 'D', 'E', 'F', 'G', 'H'].forEach((col) => {
+                    sheet.getCell(`${col}${r}`).alignment = { horizontal: 'center' };
+                });
+
+                // shu qator bilan bir vaqtda navbatdagi to'lovni ham yozamiz
+                const payment = payments[paymentIdx];
+                if (payment) {
+                    sheet.getCell(`J${r}`).value = payment.amount;
+                    sheet.getCell(`J${r}`).numFmt = '#,##0';
+                    sheet.getCell(`K${r}`).value = payment.note || '—';
+                    sheet.getCell(`L${r}`).value = new Date(payment.date);
+                    sheet.getCell(`L${r}`).numFmt = 'd-mmm';
+                    applyBorder(sheet, `J${r}:L${r}`, THIN_BORDER);
+                    ['J', 'K', 'L'].forEach((col) => {
+                        sheet.getCell(`${col}${r}`).alignment = { horizontal: 'center' };
+                    });
+                    paymentIdx += 1;
+                }
+            });
+
+            const groupEndRow = sheet.rowCount;
+
+            // -- sana "teg"ini A ustuniga yozamiz va guruh bo'yicha birlashtiramiz --
+            if (group.key) {
+                const badgeColor = badgeToggle % 2 === 0 ? COLORS.dateBadgeBlue : COLORS.dateBadgeYellow;
+                badgeToggle += 1;
+                const dateCell = sheet.getCell(`A${groupStartRow}`);
+                dateCell.value = formatBadgeDate(group.key);
+                dateCell.font = { bold: true };
+                dateCell.alignment = { horizontal: 'center', vertical: 'middle' };
+                dateCell.fill = { type: 'pattern', pattern: 'solid', fgColor: argb(badgeColor) };
+                if (groupEndRow > groupStartRow) {
+                    sheet.mergeCells(`A${groupStartRow}:A${groupEndRow}`);
+                }
+            }
+        });
+
+        // qolgan to'lovlar (mahsulot qatorlaridan ko'p bo'lsa) pastga qo'shiladi
+        while (paymentIdx < payments.length) {
+            const r = sheet.rowCount + 1;
+            const payment = payments[paymentIdx];
+            sheet.getCell(`J${r}`).value = payment.amount;
+            sheet.getCell(`J${r}`).numFmt = '#,##0';
+            sheet.getCell(`K${r}`).value = payment.note || '—';
+            sheet.getCell(`L${r}`).value = new Date(payment.date);
+            sheet.getCell(`L${r}`).numFmt = 'd-mmm';
+            applyBorder(sheet, `J${r}:L${r}`, THIN_BORDER);
+            ['J', 'K', 'L'].forEach((col) => {
+                sheet.getCell(`${col}${r}`).alignment = { horizontal: 'center' };
+            });
+            paymentIdx += 1;
+        }
+
+        const dataEndRow = sheet.rowCount;
+
+        // agar hech nima yozilmagan bo'lsa (bo'sh oy) — kamida 1 qator qoldiramiz
+        if (dataEndRow < dataStartRow) sheet.addRow([]);
+
+        // ================= 4) YANGI / OST / JAMI =================
+        sheet.addRow([]);
+        const yangiRow = sheet.rowCount + 1;
+        sheet.getCell(`G${yangiRow}`).value = 'YANGI';
+        sheet.getCell(`G${yangiRow}`).font = { bold: true };
+        sheet.getCell(`G${yangiRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: argb(COLORS.yangiBg) };
+        sheet.getCell(`H${yangiRow}`).value = { formula: `SUM(H${dataStartRow}:H${dataEndRow})` };
+        sheet.getCell(`H${yangiRow}`).numFmt = '#,##0.00';
+        sheet.getCell(`H${yangiRow}`).font = { bold: true };
+        sheet.getCell(`H${yangiRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: argb(COLORS.yangiBg) };
+        applyBorder(sheet, `G${yangiRow}:H${yangiRow}`, THIN_BORDER);
+
+        const ostRow = sheet.rowCount + 1;
+        sheet.getCell(`G${ostRow}`).value = 'OST';
+        sheet.getCell(`G${ostRow}`).font = { bold: true, color: argb(COLORS.ostFg) };
+        if (prevDebtCell) {
+            sheet.getCell(`H${ostRow}`).value = { formula: prevDebtCell };
+        }
+        sheet.getCell(`H${ostRow}`).numFmt = '#,##0.00';
+        sheet.getCell(`H${ostRow}`).font = { bold: true, color: argb(COLORS.ostFg) };
+        applyBorder(sheet, `G${ostRow}:H${ostRow}`, THIN_BORDER);
+
+        const jamiRow = sheet.rowCount + 1;
+        sheet.getCell(`G${jamiRow}`).value = 'JAMI';
+        sheet.getCell(`G${jamiRow}`).font = { bold: true };
+        sheet.getCell(`H${jamiRow}`).value = { formula: `SUM(H${yangiRow}:H${ostRow})` };
+        sheet.getCell(`H${jamiRow}`).numFmt = '#,##0.00';
+        sheet.getCell(`H${jamiRow}`).font = { bold: true, color: argb(COLORS.white) };
+        sheet.getCell(`G${jamiRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: argb(COLORS.jamiBg) };
+        sheet.getCell(`H${jamiRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: argb(COLORS.jamiBg) };
+        applyBorder(sheet, `G${jamiRow}:H${jamiRow}`, THIN_BORDER);
+
+        // -- to'lovlar jami / QARZINGIZ (rasmda pastki-o'ng burchak) --
+        const paidTotalRow = jamiRow;
+        sheet.getCell(`J${paidTotalRow}`).value = { formula: `SUM(J${dataStartRow}:J${jamiRow - 1})` };
+        sheet.getCell(`J${paidTotalRow}`).numFmt = '#,##0';
+        sheet.getCell(`J${paidTotalRow}`).font = { bold: true };
+        sheet.getCell(`K${paidTotalRow}`).value = { formula: `H${jamiRow}-J${paidTotalRow}` };
+        sheet.getCell(`K${paidTotalRow}`).numFmt = '#,##0.00';
+        sheet.getCell(`K${paidTotalRow}`).font = { bold: true, size: 14, color: argb(COLORS.qarzAmountFg) };
+        sheet.getCell(`K${paidTotalRow}`).alignment = { horizontal: 'center' };
+
+        const qarzRow = sheet.rowCount + 1;
+        sheet.getCell(`D${qarzRow}`).value = { formula: `SUM(D${dataStartRow}:D${dataEndRow})` };
+        sheet.getCell(`D${qarzRow}`).font = { bold: true };
+        sheet.getCell(`F${qarzRow}`).value = { formula: `SUM(F${dataStartRow}:F${dataEndRow})` };
+        sheet.getCell(`F${qarzRow}`).numFmt = '#,##0.00';
+        sheet.getCell(`F${qarzRow}`).font = { bold: true };
+        sheet.getCell(`K${qarzRow}`).value = 'QARZINGIZ';
+        sheet.getCell(`K${qarzRow}`).font = { bold: true, color: argb(COLORS.qarzFg) };
+        sheet.getCell(`K${qarzRow}`).alignment = { horizontal: 'center' };
+        applyBorder(sheet, `D${qarzRow}:F${qarzRow}`, THIN_BORDER);
+        applyBorder(sheet, `K${qarzRow}:K${qarzRow}`, THIN_BORDER);
+
+        prevDebtCell = `K${paidTotalRow}`;
+
+        const blockEndRow = sheet.rowCount;
+
+        // ================= 5) TASHQI "RAMKA" (zaytun rang + qalin chiziq) =========
+        // I ustuni (ajratuvchi) va tashqi chetlarga zaytun/xaki fon beramiz —
+        // rasmdagi "ramka" effektini hosil qiladi.
+        for (let r = blockStartRow; r <= blockEndRow; r += 1) {
+            sheet.getCell(`I${r}`).fill = { type: 'pattern', pattern: 'solid', fgColor: argb(COLORS.frameOlive) };
+        }
+        applyBorder(sheet, `A${blockStartRow}:H${blockEndRow}`, THICK_BORDER);
+        applyBorder(sheet, `J${blockStartRow}:L${blockEndRow}`, THICK_BORDER);
+
+        sheet.addRow([]); // bloklar orasida bo'sh qator
+    });
+
+    return workbook;
+}
+
+// ---- yordamchi: sana kalitini "24-Mar" ko'rinishiga o'giradi -------------
+function formatBadgeDate(dateStr) {
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) return dateStr;
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${String(d.getDate()).padStart(2, '0')}-${months[d.getMonth()]}`;
 }
 
 // ---------------------------------------------------------------------------
 // PDF GENERATORLARI
 // ---------------------------------------------------------------------------
 
-function buildOrdersPdf({ month, year, monthName, orders, totalOrders, totalRevenue, completed, pending, cancelled, totalKg }) {
+function buildOrdersPdf({ month, year, monthName, orders, totalOrders, totalRevenue, completed, pending, cancelled, totalKg, totalBoxes }) {
     const doc = newPdfDoc();
     pdfHeader(doc, `Buyurtmalar hisoboti — ${monthName} ${year}`, `Sahifa yaratilgan sana: ${new Date().toLocaleDateString('uz-UZ')}`);
     pdfSummaryLine(
         doc,
-        `Jami buyurtmalar: ${totalOrders}  |  Jami summa: ${formatMoney(totalRevenue)} $  |  Jami: ${totalKg} kg  |  Bajarilgan: ${completed}  |  Kutilmoqda: ${pending}  |  Bekor qilingan: ${cancelled}`
+        `Jami buyurtmalar: ${totalOrders}  |  Jami summa: ${formatMoney(totalRevenue)} $  |  Jami: ${totalBoxes} quti / ${totalKg} kg  |  Bajarilgan: ${completed}  |  Kutilmoqda: ${pending}  |  Bekor qilingan: ${cancelled}`
     );
 
     const rows = [];
@@ -1900,11 +2387,13 @@ function buildOrdersPdf({ month, year, monthName, orders, totalOrders, totalReve
     orders.forEach((order) => {
         oi += 1;
         order.items.forEach((item, i) => {
+            const hasBoxData = item.quantityBoxes != null && item.boxKg != null;
             rows.push({
                 no: i === 0 ? oi : '',
                 date: i === 0 ? new Date(order.createdAt).toLocaleDateString('uz-UZ') : '',
                 client: i === 0 ? (order.client?.name || '—') : '',
                 product: `${item.productName} (${item.size})`,
+                box: hasBoxData ? item.quantityBoxes : '',
                 qty: item.quantityKg,
                 price: formatMoney(item.pricePerKg),
                 subtotal: formatMoney(item.subtotal),
@@ -1916,11 +2405,12 @@ function buildOrdersPdf({ month, year, monthName, orders, totalOrders, totalReve
     drawPdfTable(doc, {
         columns: [
             { key: 'no', label: '№', width: 0.05, align: 'center' },
-            { key: 'date', label: 'Sana', width: 0.11 },
-            { key: 'client', label: 'Mijoz', width: 0.19 },
-            { key: 'product', label: 'Mahsulot', width: 0.22 },
+            { key: 'date', label: 'Sana', width: 0.10 },
+            { key: 'client', label: 'Mijoz', width: 0.16 },
+            { key: 'product', label: 'Mahsulot', width: 0.19 },
+            { key: 'box', label: 'Quti', width: 0.08, align: 'right' },
             { key: 'qty', label: 'Kg', width: 0.09, align: 'right' },
-            { key: 'price', label: 'Narx/kg', width: 0.12, align: 'right' },
+            { key: 'price', label: 'Narx/kg', width: 0.11, align: 'right' },
             { key: 'subtotal', label: 'Summa', width: 0.13, align: 'right' },
             { key: 'status', label: 'Status', width: 0.09 },
         ],
@@ -1931,10 +2421,10 @@ function buildOrdersPdf({ month, year, monthName, orders, totalOrders, totalReve
     return doc;
 }
 
-function buildStockPdf({ rows, totalKg, totalValue }) {
+function buildStockPdf({ rows, totalKg, totalValue, totalBoxes }) {
     const doc = newPdfDoc();
     pdfHeader(doc, "Ombordagi mahsulotlar qoldig'i", `Sana: ${new Date().toLocaleDateString('uz-UZ')}`);
-    pdfSummaryLine(doc, `Jami og'irlik: ${totalKg} kg  |  Jami qiymat: ${formatMoney(totalValue)} $`);
+    pdfSummaryLine(doc, `Jami: ${totalBoxes} quti / ${totalKg} kg  |  Jami qiymat: ${formatMoney(totalValue)} $`);
 
     drawPdfTable(doc, {
         columns: [
@@ -2000,9 +2490,9 @@ function buildSummaryPdf({ month, year, monthName, ordersData, stockData, debtsD
         rows: [
             { label: 'Jami buyurtmalar soni', value: ordersData.totalOrders },
             { label: 'Jami savdo summasi', value: `${formatMoney(ordersData.totalRevenue)} $` },
-            { label: 'Sotilgan (kg)', value: `${ordersData.totalKg} kg` },
+            { label: 'Sotilgan', value: `${ordersData.totalBoxes} quti / ${ordersData.totalKg} kg` },
             { label: 'Bajarilgan / Kutilmoqda / Bekor qilingan', value: `${ordersData.completed} / ${ordersData.pending} / ${ordersData.cancelled}` },
-            { label: 'Ombordagi jami qoldiq', value: `${stockData.totalKg} kg` },
+            { label: 'Ombordagi jami qoldiq', value: `${stockData.totalBoxes} quti / ${stockData.totalKg} kg` },
             { label: 'Ombordagi jami qiymat', value: `${formatMoney(stockData.totalValue)} $` },
             { label: "Mijozlarning jami qarzi", value: `${formatMoney(debtsData.totalDebt)} $` },
             { label: 'Qarzdor mijozlar soni', value: debtsData.debtors.length },
@@ -2116,6 +2606,34 @@ const reportController = {
         setDownloadHeaders(res, `${filenameBase}.pdf`, 'pdf');
         doc.pipe(res);
         doc.end();
+    },
+
+    /**
+     * GET /api/v1/reports/client/:clientId?format=excel
+     * Bitta mijozning barcha oylardagi buyurtma+to'lov jurnalini TORABEK
+     * misolidagi kabi bitta varaqda, oy-oy bloklar tarzida qaytaradi.
+     * Hozircha faqat Excel qo'llab-quvvatlanadi (formulali jadval PDF'da
+     * ma'nosiz — chunki PDF qayta hisoblanmaydi).
+     */
+    async clientLedger(req, res) {
+        try {
+            const { clientId } = req.params;
+            if (!isValidObjectId(clientId)) throw new ApiError(400, "Noto'g'ri mijoz ID.");
+
+            const { client, months } = await fetchClientLedgerData(clientId);
+            const workbook = buildClientLedgerExcel({ client, months });
+
+            const filenameBase = `${client.name}_hisobot_${new Date().toISOString().slice(0, 10)}`.replace(/\s+/g, '_');
+            setDownloadHeaders(res, `${filenameBase}.xlsx`, 'excel');
+            await workbook.xlsx.write(res);
+            return res.end();
+        } catch (error) {
+            // Send a proper JSON error
+            res.status(error.statusCode || 500).json({
+                success: false,
+                message: error.message || 'Hisobot yaratishda xatolik yuz berdi.',
+            });
+        }
     },
 
     /**
@@ -2263,6 +2781,7 @@ router.delete('/orders/:id', authenticate, authorize('admin'), orderController.r
 router.get('/kassa', authenticate, authorize('admin', 'manager'), kassaController.get);
 router.get('/kassa/history', authenticate, authorize('admin', 'manager'), kassaController.history);
 router.post('/kassa/expense', authenticate, authorize('admin', 'manager'), kassaController.expense);
+router.post('/kassa/income', authenticate, authorize('admin', 'manager'), kassaController.income);
 
 // ---- Dashboard ----
 router.get('/dashboard/stats', authenticate, authorize('admin', 'manager'), dashboardController.stats);
@@ -2271,6 +2790,7 @@ router.get('/dashboard/stats', authenticate, authorize('admin', 'manager'), dash
 router.get('/reports/orders', authenticate, authorize('admin', 'manager'), reportController.orders);
 router.get('/reports/stock', authenticate, authorize('admin', 'manager'), reportController.stock);
 router.get('/reports/debts', authenticate, authorize('admin', 'manager'), reportController.debts);
+router.get('/reports/client/:clientId', authenticate, authorize('admin', 'manager'), reportController.clientLedger);
 router.get('/reports/summary', authenticate, authorize('admin', 'manager'), reportController.summary);
 
 app.use('/api/v1', router);

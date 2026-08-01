@@ -186,7 +186,7 @@ export const Product = () => {
   const [category, setCategory] = useState('');
   const [sort, setSort] = useState('newest');
   const [page, setPage] = useState(1);
-  const limit = 10;
+  const limit = 50;
 
   // ---------- Detail state ----------
   const [selectedProduct, setSelectedProduct] = useState(null); // product object, not just id
