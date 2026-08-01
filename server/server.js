@@ -404,7 +404,7 @@ clientSchema.virtual('remainingDebt').get(function getRemainingDebt() {
  */
 clientSchema.methods.addPayment = async function addPayment(amount, note, userId) {
     this.paymentHistory.push({ amount, note, user: userId, date: new Date() });
-    this.debt = Math.max((this.debt || 0) - amount, 0);
+    this.debt = (this.debt || 0) - amount;
     await this.save();
     return this;
 };
@@ -856,7 +856,7 @@ const clientController = {
         const kassa = await kassaAddIncome(amount, {
             client: client._id,
             clientName: client.name,
-            note: note || `${client.name} tomonidan qarz to'lovi`,
+            note: `${client.name}\n${note}` || `${client.name} tomonidan qarz to'lovi`,
             user: req.user._id,
         });
         return sendSuccess(res, 200, "Qarz muvaffaqiyatli to'landi.", { client, kassaBalance: kassa.balance });
@@ -2110,88 +2110,131 @@ function applyBorder(sheet, range, border) {
     }
 }
 
+/**
+ * buildClientLedgerExcel
+ * Mijozning barcha oylardagi xarid va to‘lov jurnalini bitta Excel varaqida,
+ * oy-oy bloklar tarzida chiqaradi. Har bir oy ichida mahsulotlar jadvali va
+ * to‘lovlar ro‘yxati, shuningdek qarz hisob-kitoblari avtomatik bajariladi.
+ *
+ * @param {Object} params
+ * @param {Object} params.client - Mijoz hujjati (name, phone, debt va boshqalar)
+ * @param {Array}  params.months - Har oy uchun ma'lumotlar (items, payments)
+ * @returns {ExcelJS.Workbook}
+ */
 function buildClientLedgerExcel({ client, months }) {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Ombor va Savdo Boshqaruv Tizimi';
     workbook.created = new Date();
 
+    // Varaq nomi – mijoz ismidan olinadi
     const sheetName = `${client.name}`.replace(/[\\/*?:[\]]/g, ' ').slice(0, 31) || 'Mijoz';
     const sheet = workbook.addWorksheet(sheetName, {
         views: [{ showGridLines: false }],
     });
 
+    // Ustun kengliklari
     sheet.columns = [
-        { width: 12 },  // A - sana / №
-        { width: 12 },  // B - rezba
-        { width: 8 },   // C - size
-        { width: 8 },   // D - kar (quti)
-        { width: 9 },   // E - kli (1 quti kg)
-        { width: 10 },  // F - kg
-        { width: 8 },   // G - narx
-        { width: 12 },  // H - summa
-        { width: 3 },   // I - bo'sh ajratuvchi
-        { width: 12 },  // J - to'lov summa
-        { width: 16 },  // K - kimga / qarzingiz
-        { width: 12 },  // L - sana
+        { width: 12 },  // A - Sana / № (chap tomonda)
+        { width: 18 },  // B - Mahsulot
+        { width: 10 },  // C - Razmer
+        { width: 8 },   // D - SHT (dona)
+        { width: 9 },   // E - KG/1 quti
+        { width: 10 },  // F - KG (jami)
+        { width: 10 },  // G - Narh/kg
+        { width: 12 },  // H - Summa
+        { width: 3 },   // I - ajratuvchi
+        { width: 12 },  // J - To‘lov summa
+        { width: 18 },  // K - Izoh / Qarzingiz
+        { width: 12 },  // L - Sana
     ];
 
     const ALL_COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'];
     const LEFT_COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
     const RIGHT_COLS = ['J', 'K', 'L'];
 
-    let prevDebtCell = null; // avvalgi oyning "QARZINGIZ" (K-ustun) hujayra manzili
+    // ---------- Mijoz sarlavhasi (umumiy ma'lumot) ----------
+    const titleRow = 1;
+    sheet.mergeCells(`A${titleRow}:H${titleRow}`);
+    const titleCell = sheet.getCell(`A${titleRow}`);
+    titleCell.value = `Mijoz: ${client.name}  |  Telefon: ${client.phone}`;
+    titleCell.font = { bold: true, size: 14 };
+    titleCell.alignment = { horizontal: 'left', vertical: 'middle' };
+    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+    titleCell.font.color = { argb: 'FFFFFFFF' };
 
+    sheet.mergeCells(`J${titleRow}:L${titleRow}`);
+    const debtCell = sheet.getCell(`J${titleRow}`);
+    debtCell.value = `Joriy qarz: ${formatMoney(client.debt || 0)} $`;
+    debtCell.font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
+    debtCell.alignment = { horizontal: 'right', vertical: 'middle' };
+    debtCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC0392B' } };
+
+    sheet.getRow(titleRow).height = 30;
+
+    // Sarlavhadan keyin bo‘sh qator
+    sheet.addRow([]);
+    const startRow = sheet.rowCount + 1;
+
+    let prevDebtCell = null; // avvalgi oyning "QARZINGIZ" manzili
+
+    // Har bir oy uchun blok
     months.forEach((bucket) => {
         const blockStartRow = sheet.rowCount + 1;
 
-        // ================= 1) OY SARLAVHASI (MART / 2026) =================
-        const titleRow = sheet.rowCount + 1;
-        sheet.getCell(`B${titleRow}`).value = bucket.monthName.toUpperCase();
-        sheet.getCell(`B${titleRow}`).font = { bold: true, size: 12, color: argb(COLORS.monthHeaderFg) };
-        sheet.getCell(`B${titleRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: argb(COLORS.monthHeaderBg) };
-        sheet.getCell(`B${titleRow}`).alignment = { horizontal: 'center', vertical: 'middle' };
+        // ========== 1) Oy sarlavhasi ==========
+        const monthRow = sheet.rowCount + 1;
+        sheet.mergeCells(`B${monthRow}:C${monthRow}`);
+        const monthCell = sheet.getCell(`B${monthRow}`);
+        monthCell.value = `${bucket.monthName.toUpperCase()} ${bucket.year}`;
+        monthCell.font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
+        monthCell.alignment = { horizontal: 'center', vertical: 'middle' };
+        monthCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } };
 
-        sheet.getCell(`C${titleRow}`).value = bucket.year;
-        sheet.getCell(`C${titleRow}`).font = { bold: true, size: 12, color: argb(COLORS.yearFg) };
-        sheet.getCell(`C${titleRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: argb(COLORS.yearBg) };
-        sheet.getCell(`C${titleRow}`).alignment = { horizontal: 'center', vertical: 'middle' };
-        applyBorder(sheet, `B${titleRow}:C${titleRow}`, THIN_BORDER);
-        applyBorder(sheet, `J${titleRow}:L${titleRow}`, THIN_BORDER);
-
-        // KIMGA blokining sarlavha satri (rasmda ko'k chiziq, SUMMA/KIMGA/SANA
-        // ustunlari uchun)
+        // O'ng tomondagi sarlavha (SUMMA, IZOH, SANA)
         RIGHT_COLS.forEach((col) => {
-            const c = sheet.getCell(`${col}${titleRow}`);
-            c.fill = { type: 'pattern', pattern: 'solid', fgColor: argb(COLORS.kimgaHeaderBg) };
+            const c = sheet.getCell(`${col}${monthRow}`);
+            c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } };
         });
+        applyBorder(sheet, `B${monthRow}:C${monthRow}`, THIN_BORDER);
+        applyBorder(sheet, `J${monthRow}:L${monthRow}`, THIN_BORDER);
 
-        // ================= 2) USTUN SARLAVHALARI =================
+        // ========== 2) Ustun sarlavhalari ==========
         const headerRow = sheet.rowCount + 1;
-        sheet.getCell(`A${headerRow}`).value = '№';
-        sheet.getCell(`B${headerRow}`).value = 'REZBA';
-        sheet.getCell(`C${headerRow}`).value = 'SIZE';
-        sheet.getCell(`D${headerRow}`).value = 'KAR';
-        sheet.getCell(`E${headerRow}`).value = 'KLI';
-        sheet.getCell(`F${headerRow}`).value = 'KG';
-        sheet.getCell(`G${headerRow}`).value = 'NARH';
-        sheet.getCell(`H${headerRow}`).value = 'SUMMA';
-        sheet.getCell(`J${headerRow}`).value = 'SUMMA';
-        sheet.getCell(`K${headerRow}`).value = 'KIMGA';
-        sheet.getCell(`L${headerRow}`).value = 'SANA';
-        ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L'].forEach((col) => {
-            const c = sheet.getCell(`${col}${headerRow}`);
-            c.font = { bold: true };
-            c.alignment = { horizontal: 'center' };
-            c.fill = { type: 'pattern', pattern: 'solid', fgColor: argb('FFD9D9D9') };
+        const headers = [
+            { col: 'A', text: 'Sana' },
+            { col: 'B', text: 'Mahsulot' },
+            { col: 'C', text: 'Razmer' },
+            { col: 'D', text: 'SHT (dona)' },
+            { col: 'E', text: 'KG/1 quti' },
+            { col: 'F', text: 'KG (jami)' },
+            { col: 'G', text: 'Narh/kg' },
+            { col: 'H', text: 'Summa' },
+        ];
+        headers.forEach(({ col, text }) => {
+            const cell = sheet.getCell(`${col}${headerRow}`);
+            cell.value = text;
+            cell.font = { bold: true };
+            cell.alignment = { horizontal: 'center' };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
         });
+        // O'ng ustunlar
+        ['J', 'K', 'L'].forEach((col) => {
+            const cell = sheet.getCell(`${col}${headerRow}`);
+            cell.font = { bold: true };
+            cell.alignment = { horizontal: 'center' };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
+        });
+        sheet.getCell('J' + headerRow).value = 'To\'lov';
+        sheet.getCell('K' + headerRow).value = 'Izoh';
+        sheet.getCell('L' + headerRow).value = 'Sana';
+
         applyBorder(sheet, `A${headerRow}:H${headerRow}`, THIN_BORDER);
         applyBorder(sheet, `J${headerRow}:L${headerRow}`, THIN_BORDER);
 
-        // ================= 3) MAHSULOT / TO'LOV QATORLARI =================
+        // ========== 3) Ma'lumotlar: mahsulot qatorlari va to'lovlar ==========
         const dataStartRow = sheet.rowCount + 1;
 
-        // -- items ni sana bo'yicha guruhlash (ketma-ket kelgan bir xil
-        //    sanalar bitta guruh hisoblanadi, rasmdagi kabi) --
+        // Mahsulotlarni sana bo'yicha guruhlaymiz (bir xil sana bitta badge)
         const groups = [];
         (bucket.items || []).forEach((item) => {
             const key = item.date || 'SANASIZ';
@@ -2204,12 +2247,10 @@ function buildClientLedgerExcel({ client, months }) {
         });
         if (groups.length === 0) groups.push({ key: null, items: [] });
 
-        // payments alohida, o'ng tomonda ketma-ket yoziladi (sana bilan bog'liq
-        // emas — ular o'z L-ustunidagi sanasi bilan ko'rsatiladi)
         const payments = bucket.payments || [];
         let paymentIdx = 0;
 
-        let badgeToggle = 0; // 0 -> ko'k, 1 -> sariq (rasmdagi kabi navbatlashadi)
+        let badgeToggle = 0; // navbat bilan ko'k/sariq
 
         groups.forEach((group) => {
             const groupStartRow = sheet.rowCount + 1;
@@ -2217,17 +2258,26 @@ function buildClientLedgerExcel({ client, months }) {
             group.items.forEach((item) => {
                 const r = sheet.rowCount + 1;
                 const hasBoxData = item.quantityBoxes != null && item.boxKg != null;
+
+                // A - Sana (badge keyingi bosqichda qo'yiladi)
+                // B - Mahsulot
                 sheet.getCell(`B${r}`).value = item.productName;
+                // C - Razmer
                 sheet.getCell(`C${r}`).value = item.size;
+                // D - SHT (quti soni)
                 if (hasBoxData) {
                     sheet.getCell(`D${r}`).value = item.quantityBoxes;
                     sheet.getCell(`E${r}`).value = item.boxKg;
                     sheet.getCell(`F${r}`).value = { formula: `E${r}*D${r}` };
                 } else {
+                    // eski buyurtmalarda quti ma'lumoti bo'lmasa, faqat kg bor
                     sheet.getCell(`F${r}`).value = item.quantityKg;
                 }
+                // G - Narh/kg
                 sheet.getCell(`G${r}`).value = item.pricePerKg;
+                // H - Summa = kg * narh
                 sheet.getCell(`H${r}`).value = { formula: `F${r}*G${r}` };
+                // Formatlash
                 sheet.getCell(`F${r}`).numFmt = '#,##0.00';
                 sheet.getCell(`H${r}`).numFmt = '#,##0.00';
                 applyBorder(sheet, `A${r}:H${r}`, THIN_BORDER);
@@ -2235,7 +2285,7 @@ function buildClientLedgerExcel({ client, months }) {
                     sheet.getCell(`${col}${r}`).alignment = { horizontal: 'center' };
                 });
 
-                // shu qator bilan bir vaqtda navbatdagi to'lovni ham yozamiz
+                // O'ng tomondagi to'lov (agar bor bo'lsa)
                 const payment = payments[paymentIdx];
                 if (payment) {
                     sheet.getCell(`J${r}`).value = payment.amount;
@@ -2253,22 +2303,22 @@ function buildClientLedgerExcel({ client, months }) {
 
             const groupEndRow = sheet.rowCount;
 
-            // -- sana "teg"ini A ustuniga yozamiz va guruh bo'yicha birlashtiramiz --
+            // A ustuniga sana "badge" qo'yish
             if (group.key) {
-                const badgeColor = badgeToggle % 2 === 0 ? COLORS.dateBadgeBlue : COLORS.dateBadgeYellow;
+                const badgeColor = badgeToggle % 2 === 0 ? 'FFBDD7EE' : 'FFFFFF00';
                 badgeToggle += 1;
                 const dateCell = sheet.getCell(`A${groupStartRow}`);
                 dateCell.value = formatBadgeDate(group.key);
                 dateCell.font = { bold: true };
                 dateCell.alignment = { horizontal: 'center', vertical: 'middle' };
-                dateCell.fill = { type: 'pattern', pattern: 'solid', fgColor: argb(badgeColor) };
+                dateCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: badgeColor } };
                 if (groupEndRow > groupStartRow) {
                     sheet.mergeCells(`A${groupStartRow}:A${groupEndRow}`);
                 }
             }
         });
 
-        // qolgan to'lovlar (mahsulot qatorlaridan ko'p bo'lsa) pastga qo'shiladi
+        // Qolgan to'lovlar (mahsulot qatorlari tugagandan keyin)
         while (paymentIdx < payments.length) {
             const r = sheet.rowCount + 1;
             const payment = payments[paymentIdx];
@@ -2286,29 +2336,29 @@ function buildClientLedgerExcel({ client, months }) {
 
         const dataEndRow = sheet.rowCount;
 
-        // agar hech nima yozilmagan bo'lsa (bo'sh oy) — kamida 1 qator qoldiramiz
+        // Agar hech qanday qator qo'shilmagan bo'lsa, bo'sh qator qoldiramiz
         if (dataEndRow < dataStartRow) sheet.addRow([]);
 
-        // ================= 4) YANGI / OST / JAMI =================
+        // ========== 4) YANGI, OST, JAMI va QARZINGIZ ==========
         sheet.addRow([]);
         const yangiRow = sheet.rowCount + 1;
         sheet.getCell(`G${yangiRow}`).value = 'YANGI';
         sheet.getCell(`G${yangiRow}`).font = { bold: true };
-        sheet.getCell(`G${yangiRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: argb(COLORS.yangiBg) };
+        sheet.getCell(`G${yangiRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } };
         sheet.getCell(`H${yangiRow}`).value = { formula: `SUM(H${dataStartRow}:H${dataEndRow})` };
         sheet.getCell(`H${yangiRow}`).numFmt = '#,##0.00';
         sheet.getCell(`H${yangiRow}`).font = { bold: true };
-        sheet.getCell(`H${yangiRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: argb(COLORS.yangiBg) };
+        sheet.getCell(`H${yangiRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFF00' } };
         applyBorder(sheet, `G${yangiRow}:H${yangiRow}`, THIN_BORDER);
 
         const ostRow = sheet.rowCount + 1;
         sheet.getCell(`G${ostRow}`).value = 'OST';
-        sheet.getCell(`G${ostRow}`).font = { bold: true, color: argb(COLORS.ostFg) };
+        sheet.getCell(`G${ostRow}`).font = { bold: true, color: { argb: 'FFFF0000' } };
         if (prevDebtCell) {
             sheet.getCell(`H${ostRow}`).value = { formula: prevDebtCell };
         }
         sheet.getCell(`H${ostRow}`).numFmt = '#,##0.00';
-        sheet.getCell(`H${ostRow}`).font = { bold: true, color: argb(COLORS.ostFg) };
+        sheet.getCell(`H${ostRow}`).font = { bold: true, color: { argb: 'FFFF0000' } };
         applyBorder(sheet, `G${ostRow}:H${ostRow}`, THIN_BORDER);
 
         const jamiRow = sheet.rowCount + 1;
@@ -2316,47 +2366,48 @@ function buildClientLedgerExcel({ client, months }) {
         sheet.getCell(`G${jamiRow}`).font = { bold: true };
         sheet.getCell(`H${jamiRow}`).value = { formula: `SUM(H${yangiRow}:H${ostRow})` };
         sheet.getCell(`H${jamiRow}`).numFmt = '#,##0.00';
-        sheet.getCell(`H${jamiRow}`).font = { bold: true, color: argb(COLORS.white) };
-        sheet.getCell(`G${jamiRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: argb(COLORS.jamiBg) };
-        sheet.getCell(`H${jamiRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: argb(COLORS.jamiBg) };
+        sheet.getCell(`H${jamiRow}`).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        sheet.getCell(`G${jamiRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF00B0F0' } };
+        sheet.getCell(`H${jamiRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF00B0F0' } };
         applyBorder(sheet, `G${jamiRow}:H${jamiRow}`, THIN_BORDER);
 
-        // -- to'lovlar jami / QARZINGIZ (rasmda pastki-o'ng burchak) --
+        // To'lovlar yig'indisi va QARZINGIZ
         const paidTotalRow = jamiRow;
         sheet.getCell(`J${paidTotalRow}`).value = { formula: `SUM(J${dataStartRow}:J${jamiRow - 1})` };
         sheet.getCell(`J${paidTotalRow}`).numFmt = '#,##0';
         sheet.getCell(`J${paidTotalRow}`).font = { bold: true };
-        sheet.getCell(`K${paidTotalRow}`).value = { formula: `H${jamiRow}-J${paidTotalRow}` };
         sheet.getCell(`K${paidTotalRow}`).numFmt = '#,##0.00';
-        sheet.getCell(`K${paidTotalRow}`).font = { bold: true, size: 14, color: argb(COLORS.qarzAmountFg) };
+        sheet.getCell(`K${paidTotalRow}`).font = { bold: true, size: 14, color: { argb: 'FFFF0000' } };
         sheet.getCell(`K${paidTotalRow}`).alignment = { horizontal: 'center' };
 
+        // Qo'shimcha jamilar (SHT, KG)
         const qarzRow = sheet.rowCount + 1;
         sheet.getCell(`D${qarzRow}`).value = { formula: `SUM(D${dataStartRow}:D${dataEndRow})` };
         sheet.getCell(`D${qarzRow}`).font = { bold: true };
         sheet.getCell(`F${qarzRow}`).value = { formula: `SUM(F${dataStartRow}:F${dataEndRow})` };
         sheet.getCell(`F${qarzRow}`).numFmt = '#,##0.00';
         sheet.getCell(`F${qarzRow}`).font = { bold: true };
-        sheet.getCell(`K${qarzRow}`).value = 'QARZINGIZ';
-        sheet.getCell(`K${qarzRow}`).font = { bold: true, color: argb(COLORS.qarzFg) };
+        // sheet.getCell(`K${qarzRow}`).value = 'QARZINGIZ';
+        sheet.getCell(`K${qarzRow}`).font = { bold: true, color: { argb: 'FF0070C0' } };
         sheet.getCell(`K${qarzRow}`).alignment = { horizontal: 'center' };
         applyBorder(sheet, `D${qarzRow}:F${qarzRow}`, THIN_BORDER);
         applyBorder(sheet, `K${qarzRow}:K${qarzRow}`, THIN_BORDER);
 
+        // Keyingi oy uchun OST manzilini saqlaymiz
         prevDebtCell = `K${paidTotalRow}`;
 
         const blockEndRow = sheet.rowCount;
 
-        // ================= 5) TASHQI "RAMKA" (zaytun rang + qalin chiziq) =========
-        // I ustuni (ajratuvchi) va tashqi chetlarga zaytun/xaki fon beramiz —
-        // rasmdagi "ramka" effektini hosil qiladi.
+        // ========== 5) Tashqi ramka va ajratgich ==========
+        // I ustunini zaytun rang bilan to'ldirish (ramka effekti)
         for (let r = blockStartRow; r <= blockEndRow; r += 1) {
-            sheet.getCell(`I${r}`).fill = { type: 'pattern', pattern: 'solid', fgColor: argb(COLORS.frameOlive) };
+            sheet.getCell(`I${r}`).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF9E9662' } };
         }
         applyBorder(sheet, `A${blockStartRow}:H${blockEndRow}`, THICK_BORDER);
         applyBorder(sheet, `J${blockStartRow}:L${blockEndRow}`, THICK_BORDER);
 
-        sheet.addRow([]); // bloklar orasida bo'sh qator
+        // Bloklar orasida bo'sh qator
+        sheet.addRow([]);
     });
 
     return workbook;
