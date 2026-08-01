@@ -331,11 +331,11 @@ const buildOrderPrintHtml = (order) => {
     .join('');
 
   const emptyRowsHtml = items.length === 0
-    ? `< tr > <td colspan="7" class="c empty">Mahsulotlar yo‘q</td></ > `
+    ? `<tr> <td colspan="7" class="c empty">Mahsulotlar yo‘q</td></> `
     : '';
 
   const oneCopyHtml = `
-  < section class="copy" >
+  <section class="copy">
       <header class="head">
         <h1>BUYURTMA №${orderNo}</h1>
         <div class="meta-row">
@@ -378,9 +378,9 @@ const buildOrderPrintHtml = (order) => {
         <div class="sign"><div class="sign-line"></div><span>Sotuvchi imzosi</span></div>
         <div class="sign"><div class="sign-line"></div><span>Mijoz imzosi</span></div>
       </footer>
-    </ > `;
+    </section> `;
 
-  return `< !DOCTYPE html >
+  return `<!DOCTYPE html>
   <html lang="uz">
     <head>
       <meta charset="UTF-8" />

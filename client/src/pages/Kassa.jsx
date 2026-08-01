@@ -261,8 +261,8 @@ const buildKassaHistoryPrintHtml = ({ transactions, typeFilter, fromDate, toDate
           <td class="c">${idx + 1}</td>
           <td>${escapeHtml(dateStr)}</td>
           <td class="c"><span class="badge ${isIncome ? 'in' : 'out'}">${isIncome ? 'KIRIM' : 'CHIQIM'}</span></td>
-          <td class="r b ${isIncome ? 'pos' : 'neg'}">${isIncome ? '+' : '-'}${formatMoneyPrint(tx.amount)}</td>
           <td>${escapeHtml(tx.reason || tx.source || '-')}</td>
+          <td class="r b ${isIncome ? 'pos' : 'neg'}">${isIncome ? '+' : '-'}${formatMoneyPrint(tx.amount)}</td>
           <td>${escapeHtml(tx.user?.name || 'Noma’lum')}</td>
         </tr>`;
         })
@@ -301,8 +301,8 @@ const buildKassaHistoryPrintHtml = ({ transactions, typeFilter, fromDate, toDate
         <th style="width:6%">№</th>
         <th style="width:18%">Sana</th>
         <th style="width:12%">Turi</th>
+        <th style="width:32%">Izoh</th>
         <th style="width:15%">Summa ($)</th>
-        <th style="width:32%">Sabab / Izoh</th>
         <th style="width:17%">Kim tomonidan</th>
       </tr>
     </thead>
@@ -343,8 +343,6 @@ const buildKassaGroupPrintHtml = ({ selectedMonth, groupData }) => {
         <td class="c">${idx + 1}</td>
         <td>${escapeHtml(item.note)}</td>
         <td class="r b neg">${formatMoneyPrint(item.total)}</td>
-        <td class="c">${item.count}</td>
-        <td class="r">${item.count > 1 ? formatMoneyPrint(item.total / item.count) : '-'}</td>
       </tr>`)
         .join('');
 
@@ -380,8 +378,6 @@ const buildKassaGroupPrintHtml = ({ selectedMonth, groupData }) => {
         <th style="width:6%">№</th>
         <th style="width:40%">Sabab / Izoh</th>
         <th style="width:18%">Jami summa ($)</th>
-        <th style="width:12%">Soni</th>
-        <th style="width:24%">O‘rtacha ($)</th>
       </tr>
     </thead>
     <tbody>
@@ -390,9 +386,8 @@ const buildKassaGroupPrintHtml = ({ selectedMonth, groupData }) => {
     <tfoot>
       <tr>
         <td class="r">Jami:</td>
-        <td class="r neg">${formatMoneyPrint(totalSum)}</td>
-        <td class="c">${totalCount}</td>
         <td></td>
+        <td class="r neg">${formatMoneyPrint(totalSum)}</td>
       </tr>
     </tfoot>
   </table>
@@ -843,7 +838,7 @@ export const Kassa = () => {
                                         <th className="px-6 py-4 font-semibold">Sana</th>
                                         <th className="px-6 py-4 font-semibold">Turi</th>
                                         <th className="px-6 py-4 font-semibold text-right">Summa ($)</th>
-                                        <th className="px-6 py-4 font-semibold">Sabab / Izoh</th>
+                                        <th className="px-6 py-4 font-semibold">Izoh</th>
                                         <th className="px-6 py-4 font-semibold">Kim tomonidan</th>
                                     </tr>
                                 </thead>
@@ -1171,8 +1166,6 @@ export const Kassa = () => {
                                             <tr>
                                                 <th className="px-4 py-3 text-left font-semibold text-gray-600">Sabab / Izoh</th>
                                                 <th className="px-4 py-3 text-right font-semibold text-gray-600">Jami summa ($)</th>
-                                                <th className="px-4 py-3 text-center font-semibold text-gray-600">Soni</th>
-                                                <th className="px-4 py-3 text-right font-semibold text-gray-600">O‘rtacha</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-100">
@@ -1181,10 +1174,6 @@ export const Kassa = () => {
                                                     <td className="px-4 py-3 text-gray-800 font-medium">{item.note}</td>
                                                     <td className="px-4 py-3 text-right font-bold text-red-600">
                                                         {item.total.toLocaleString()}
-                                                    </td>
-                                                    <td className="px-4 py-3 text-center text-gray-600">{item.count}</td>
-                                                    <td className="px-4 py-3 text-right text-gray-500">
-                                                        {item.count > 1 ? (item.total / item.count).toFixed(2) : '-'}
                                                     </td>
                                                 </tr>
                                             ))}
@@ -1195,10 +1184,6 @@ export const Kassa = () => {
                                                 <td className="px-4 py-3 text-right font-bold text-red-700">
                                                     {groupData.reduce((sum, item) => sum + item.total, 0).toLocaleString()}
                                                 </td>
-                                                <td className="px-4 py-3 text-center font-bold text-gray-800">
-                                                    {groupData.reduce((sum, item) => sum + item.count, 0)}
-                                                </td>
-                                                <td className="px-4 py-3 text-right text-gray-500">-</td>
                                             </tr>
                                         </tfoot>
                                     </table>
