@@ -720,11 +720,12 @@ export const Clients = () => {
                                         type="number"
                                         name="debt"
                                         step="0.01"
+                                        min="-999999999"
                                         value={form.debt}
                                         onChange={handleFormChange}
                                         className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none ${formErrors.debt ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
                                             }`}
-                                        placeholder="0.00"
+                                        placeholder="0.00 (manfiy ham mumkin)"
                                     />
                                     {formErrors.debt && <p className="text-xs text-red-500 mt-1">{formErrors.debt}</p>}
                                     {editingClient && (
@@ -1145,12 +1146,12 @@ export const Clients = () => {
                                         type="number"
                                         name="debt"
                                         step="0.01"
-                                        min="0"
+                                        min="-999999999"   // <-- FIX: allow negative values
                                         value={form.debt}
                                         onChange={handleFormChange}
                                         className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none ${formErrors.debt ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
                                             }`}
-                                        placeholder="0.00"
+                                        placeholder="0.00 (manfiy ham mumkin)"
                                     />
                                     {formErrors.debt && <p className="text-xs text-red-500 mt-1">{formErrors.debt}</p>}
                                     {editingClient && (
