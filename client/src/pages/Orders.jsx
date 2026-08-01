@@ -353,7 +353,7 @@ const buildOrderPrintHtml = (order) => {
           <tr>
             <th style="width:6%">№</th>
             <th style="width:30%">Mahsulot</th>
-            <th style="width:12%">O‘lcham</th>
+            <th style="width:12%">Razmer</th>
             <th style="width:10%">SHT</th>
             <th style="width:12%">Kg</th>
             <th style="width:14%">Narx (kg)</th>
@@ -687,7 +687,7 @@ export const Orders = () => {
     if (!createForm.clientId) errors.clientId = 'Mijoz tanlanishi shart.';
     createForm.items.forEach((item, i) => {
       if (!item.productId) errors[`item - ${i} -productId`] = 'Mahsulot tanlang.';
-      if (!item.size) errors[`item - ${i} -size`] = 'O‘lcham tanlang.';
+      if (!item.size) errors[`item - ${i} -size`] = 'Razmer tanlang.';
       if (!item.price || Number(item.price) <= 0) errors[`item - ${i} -price`] = 'Narx 0 dan katta bo‘lishi kerak.';
       const boxes = Number(item.quantityBoxes);
       if (!item.quantityBoxes || !Number.isInteger(boxes) || boxes <= 0) {
@@ -951,7 +951,7 @@ export const Orders = () => {
                     <thead className="bg-white border-b border-gray-200">
                       <tr>
                         <th className="px-4 py-3 text-left font-medium text-gray-600">Mahsulot</th>
-                        <th className="px-4 py-3 text-left font-medium text-gray-600">O‘lcham</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-600">Razmer</th>
                         <th className="px-4 py-3 text-center font-medium text-gray-600">SHT</th>
                         <th className="px-4 py-3 text-right font-medium text-gray-600">Miqdor (kg)</th>
                         <th className="px-4 py-3 text-right font-medium text-gray-600">Narx (kg / $)</th>
@@ -1288,7 +1288,7 @@ export const Orders = () => {
 
                           {/* Size dropdown */}
                           <div className="flex-1 min-w-[80px]">
-                            <label className="block text-xs text-gray-500 mb-0.5">O‘lcham</label>
+                            <label className="block text-xs text-gray-500 mb-0.5">Razmer</label>
                             <select
                               value={item.size}
                               onChange={(e) => handleItemSizeChange(idx, e.target.value)}

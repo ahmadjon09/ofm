@@ -538,19 +538,19 @@ export const Product = () => {
               <StatCard icon={Box} label="Jami vazn (kg)" value={`${totalKg.toLocaleString()} kg`} />
               <StatCard icon={Layers} label="Jami qutilar" value={`${totalBoxes.toLocaleString()} ta`} />
               <StatCard icon={DollarSign} label="Umumiy narx" value={`${totalPrice.toLocaleString()} $`} />
-              <StatCard icon={Ruler} label="O‘lchamlar soni" value={product.sizes.length} />
+              <StatCard icon={Ruler} label="Razmerlar soni" value={product.sizes.length} />
             </div>
 
             {/* Sizes table with "Umumiy narx" (total price per size) */}
             <div className="p-6">
               <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-4">
-                O‘lchamlar ({product.sizes.length})
+                Razmerlar ({product.sizes.length})
               </h3>
               <div className="overflow-x-auto rounded-xl border border-gray-200">
                 <table className="w-full text-sm">
                   <thead className="border-b border-gray-200">
                     <tr>
-                      <th className="px-4 py-3 text-left font-medium text-gray-600">O‘lcham</th>
+                      <th className="px-4 py-3 text-left font-medium text-gray-600">Razmer</th>
                       <th className="px-4 py-3 text-left font-medium text-gray-600">Qutilar soni</th>
                       <th className="px-4 py-3 text-left font-medium text-gray-600">Quti kg</th>
                       <th className="px-4 py-3 text-right font-medium text-gray-600">Jami (kg)</th>
@@ -683,7 +683,7 @@ export const Product = () => {
                   <tr className="border-b border-gray-200 text-xs uppercase tracking-wide text-gray-500">
                     <th className="px-4 py-3 font-medium">Nomi</th>
                     <th className="px-4 py-3 font-medium">Kategoriya</th>
-                    <th className="px-4 py-3 font-medium">O‘lchamlar</th>
+                    <th className="px-4 py-3 font-medium">Razmerlar</th>
                     <th className="px-4 py-3 font-medium text-right">Amallar</th>
                   </tr>
                 </thead>
@@ -878,7 +878,7 @@ export const Product = () => {
 
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm font-medium text-gray-700">O‘lchamlar *</label>
+                    <label className="block text-sm font-medium text-gray-700">Razmerlar *</label>
                     <button
                       type="button"
                       onClick={addSizeRow}
@@ -946,7 +946,7 @@ export const Product = () => {
                           onClick={() => removeSizeRow(idx)}
                           className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition self-center mt-4 disabled:opacity-30 disabled:cursor-not-allowed"
                           disabled={form.sizes.length <= 1}
-                          title={form.sizes.length <= 1 ? 'Kamida bitta o‘lcham qolishi kerak' : 'O‘lchamni olib tashlash'}
+                          title={form.sizes.length <= 1 ? 'Kamida bitta Razmer qolishi kerak' : 'Razmerni olib tashlash'}
                         >
                           <X size={18} />
                         </button>
