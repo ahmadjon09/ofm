@@ -150,7 +150,7 @@ const ExportModal = ({ isOpen, onClose }) => {
         <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden transform transition-all scale-100">
                 {/* Header */}
-                <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50">
+                <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between ">
                     <div className="flex items-center gap-2">
                         <Download className="w-5 h-5 text-blue-600" />
                         <h2 className="text-lg font-bold text-gray-900">Hisobot yuklab olish</h2>
@@ -177,7 +177,7 @@ const ExportModal = ({ isOpen, onClose }) => {
                                     onClick={() => setFormData({ ...formData, type: item.id })}
                                     className={`flex items-center justify-center gap-2 p-3 rounded-lg border text-sm font-medium transition ${formData.type === item.id
                                         ? 'border-blue-500 bg-blue-50 text-blue-700 ring-1 ring-blue-500'
-                                        : 'border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300'
+                                        : 'border-gray-200 text-gray-600 hover: hover:border-gray-300'
                                         }`}
                                 >
                                     <item.icon size={16} />
@@ -225,7 +225,7 @@ const ExportModal = ({ isOpen, onClose }) => {
                                 onClick={() => setFormData({ ...formData, format: 'excel' })}
                                 className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-lg border transition ${formData.format === 'excel'
                                     ? 'border-green-500 bg-green-50 text-green-700 ring-1 ring-green-500'
-                                    : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                                    : 'border-gray-200 text-gray-600 hover:'
                                     }`}
                             >
                                 <FileSpreadsheet size={18} />
@@ -235,7 +235,7 @@ const ExportModal = ({ isOpen, onClose }) => {
                                 onClick={() => setFormData({ ...formData, format: 'pdf' })}
                                 className={`flex-1 flex items-center justify-center gap-2 p-3 rounded-lg border transition ${formData.format === 'pdf'
                                     ? 'border-red-500 bg-red-50 text-red-700 ring-1 ring-red-500'
-                                    : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                                    : 'border-gray-200 text-gray-600 hover:'
                                     }`}
                             >
                                 <Printer size={18} />
@@ -246,11 +246,11 @@ const ExportModal = ({ isOpen, onClose }) => {
                 </div>
 
                 {/* Footer */}
-                <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end gap-3">
+                <div className="px-6 py-4  border-t border-gray-100 flex justify-end gap-3">
                     <button
                         onClick={onClose}
                         disabled={loading}
-                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover: disabled:opacity-50"
                     >
                         Bekor qilish
                     </button>
@@ -317,7 +317,7 @@ export const Dashboard = () => {
     // ---------- Loading ----------
     if (isLoading) {
         return (
-            <div className="min-h-screen flex items-center justify-center bg-gray-50">
+            <div className="min-h-screen flex items-center justify-center ">
                 <div className="flex flex-col items-center gap-3">
                     <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
                     <p className="text-gray-500 font-medium">Statistika yuklanmoqda...</p>
@@ -329,7 +329,7 @@ export const Dashboard = () => {
     // ---------- Error ----------
     if (error) {
         return (
-            <div className="min-h-screen flex items-center justify-center px-4 bg-gray-50">
+            <div className="min-h-screen flex items-center justify-center px-4">
                 <div className="bg-white rounded-2xl shadow-lg p-8 max-w-md w-full text-center border border-red-100">
                     <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
                     <h3 className="text-lg font-semibold text-gray-900 mb-2">Statistika yuklanmadi</h3>
@@ -349,8 +349,8 @@ export const Dashboard = () => {
 
     // ---------- Render ----------
     return (
-        <div className="min-h-screen bg-gray-50/50 py-6 px-4 sm:px-6">
-            <div className="max-w-7xl mx-auto">
+        <div className="min-h-screen py-6 px-4 sm:px-6">
+            <div className="mx-auto">
                 {/* Header */}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
                     <div>
@@ -438,7 +438,7 @@ export const Dashboard = () => {
                     {/* Monthly Revenue Trend */}
                     <ChartCard title="Oylik daromad dinamikasi (so‘nggi 6 oy)">
                         {monthlyRevenueTrend.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center h-64 text-gray-400 bg-gray-50 rounded-lg">
+                            <div className="flex flex-col items-center justify-center h-64 text-gray-400  rounded-lg">
                                 <BarChart size={48} className="mb-2 opacity-20" />
                                 <p>Hozircha maʼlumot yo‘q</p>
                             </div>
@@ -462,7 +462,7 @@ export const Dashboard = () => {
                     {/* Daily Revenue Trend */}
                     <ChartCard title="Kunlik daromad (oxirgi 30 kun)">
                         {dailyRevenueTrend.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center h-64 text-gray-400 bg-gray-50 rounded-lg">
+                            <div className="flex flex-col items-center justify-center h-64 text-gray-400  rounded-lg">
                                 <LineChart size={48} className="mb-2 opacity-20" />
                                 <p>Hozircha maʼlumot yo‘q</p>
                             </div>
@@ -496,7 +496,7 @@ export const Dashboard = () => {
                     {/* Order Status Pie */}
                     <ChartCard title="Buyurtma holatlari taqsimoti">
                         {orderStatusChart.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center h-64 text-gray-400 bg-gray-50 rounded-lg">
+                            <div className="flex flex-col items-center justify-center h-64 text-gray-400  rounded-lg">
                                 <PieChart size={48} className="mb-2 opacity-20" />
                                 <p>Hozircha maʼlumot yo‘q</p>
                             </div>
@@ -528,7 +528,7 @@ export const Dashboard = () => {
                     {/* Top Products by Quantity */}
                     <ChartCard title="TOP-5 Eng ko‘p sotilgan mahsulotlar">
                         {topProducts.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center h-64 text-gray-400 bg-gray-50 rounded-lg">
+                            <div className="flex flex-col items-center justify-center h-64 text-gray-400  rounded-lg">
                                 <BarChart size={48} className="mb-2 opacity-20" />
                                 <p>Hozircha maʼlumot yo‘q</p>
                             </div>
@@ -560,7 +560,7 @@ export const Dashboard = () => {
                     <div className="lg:col-span-1">
                         <ChartCard title="Eng ko‘p qarzdor mijozlar">
                             {topClientsByDebt.length === 0 ? (
-                                <div className="flex flex-col items-center justify-center h-64 text-gray-400 bg-gray-50 rounded-lg">
+                                <div className="flex flex-col items-center justify-center h-64 text-gray-400  rounded-lg">
                                     <Users size={48} className="mb-2 opacity-20" />
                                     <p>Qarzdorlar yo‘q</p>
                                 </div>
@@ -591,14 +591,14 @@ export const Dashboard = () => {
                         </div>
 
                         {latestOrders.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center h-48 text-gray-400 bg-gray-50 rounded-lg">
+                            <div className="flex flex-col items-center justify-center h-48 text-gray-400  rounded-lg">
                                 <ShoppingCart size={48} className="mb-2 opacity-20" />
                                 <p>Hali buyurtma yo‘q</p>
                             </div>
                         ) : (
                             <div className="overflow-x-auto">
                                 <table className="w-full text-sm">
-                                    <thead className="border-b border-gray-100 text-left text-xs text-gray-500 uppercase tracking-wider bg-gray-50/50">
+                                    <thead className="border-b border-gray-100 text-left text-xs text-gray-500 uppercase tracking-wider /50">
                                         <tr>
                                             <th className="px-4 py-3 font-medium">Mijoz</th>
                                             <th className="px-4 py-3 font-medium">Summa</th>
@@ -608,7 +608,7 @@ export const Dashboard = () => {
                                     </thead>
                                     <tbody className="divide-y divide-gray-50">
                                         {latestOrders.map((order) => (
-                                            <tr key={order._id} className="hover:bg-gray-50/50 transition-colors">
+                                            <tr key={order._id} className="hover:/50 transition-colors">
                                                 <td className="px-4 py-3 font-medium text-gray-800">
                                                     {order.client?.name || 'Noma’lum'}
                                                 </td>

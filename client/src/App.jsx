@@ -66,10 +66,14 @@ export default function App() {
   const routes = [
     { index: true, element: <Dashboard /> },
     { path: 'products', element: <Product /> },
+    { path: 'products/:id', element: <Product /> },
     { path: 'users', element: <Users /> },
     { path: 'clients', element: <Clients /> },
+    { path: 'clients/:id', element: <Clients /> },
     { path: 'orders', element: <Orders /> },
+    { path: 'orders/:id', element: <Orders /> },
     { path: 'kassa', element: <Kassa /> },
+    { path: 'kassa/:id', element: <Kassa /> },
     { path: '*', element: <Err /> }
   ].filter(Boolean)
 

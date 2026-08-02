@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import useSWR from 'swr';
 import api from '../middlewares/fetcher';
 import {
@@ -13,6 +14,8 @@ import {
     FileText,
     PieChart,
     Printer,
+    Eye,
+    Info,
 } from 'lucide-react';
 
 const KASSA_URL = '/kassa';
@@ -71,11 +74,9 @@ const StatCard = ({ icon: Icon, label, value, color = 'blue', subValue }) => {
 };
 
 // ============================================================
-// PRINT: umumiy yordamchi funksiyalar
-// (Orders.jsx'dagi bilan bir xil, ishonchli iframe-asosidagi usul)
+// PRINT HELPER FUNCTIONS (unchanged)
 // ============================================================
 
-// HTML-ga chiqarilayotgan matnni xavfsizlashtirish
 const escapeHtml = (value) => {
     if (value === undefined || value === null) return '';
     return String(value)
@@ -86,15 +87,11 @@ const escapeHtml = (value) => {
         .replace(/'/g, '&#39;');
 };
 
-// Pul miqdorini chop etish uchun formatlash (belgisiz, faqat son)
 const formatMoneyPrint = (val) => {
     if (val === undefined || val === null || Number.isNaN(Number(val))) return '0';
     return Number(val).toLocaleString('uz-UZ', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 };
 
-// Berilgan to'liq HTML hujjatni ko'rinmas iframe orqali chop etadi.
-// Asosiy sahifa DOM/CSS'iga umuman bog'liq emas — shu sababli natija
-// har doim ishonchli va toza chiqadi (window.print() o'rniga).
 const printHtmlDocument = (html, onError) => {
     const iframe = document.createElement('iframe');
     iframe.style.position = 'fixed';
@@ -129,11 +126,9 @@ const printHtmlDocument = (html, onError) => {
     if (iframe.contentWindow) {
         iframe.contentWindow.onafterprint = cleanup;
     }
-    // Zaxira: onafterprint ishlamasa ham, iframe baribir tozalanadi
     setTimeout(cleanup, 60000);
 };
 
-// Chop etish hujjatlari uchun umumiy CSS (A4, chiroyli jadval)
 const PRINT_BASE_STYLE = `
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; }
@@ -233,7 +228,6 @@ const PRINT_BASE_STYLE = `
     }
 `;
 
-// Kassa tarixi (operatsiyalar ro'yxati) hisobotini quradi — joriy filtrlarga mos
 const buildKassaHistoryPrintHtml = ({ transactions, typeFilter, fromDate, toDate, balance }) => {
     const list = transactions || [];
     const totalIncome = list.filter((t) => t.type === 'KIRIM').reduce((s, t) => s + Number(t.amount || 0), 0);
@@ -326,7 +320,6 @@ const buildKassaHistoryPrintHtml = ({ transactions, typeFilter, fromDate, toDate
 </html>`;
 };
 
-// Chiqimlar guruhlari (oylik) hisobotini quradi
 const buildKassaGroupPrintHtml = ({ selectedMonth, groupData }) => {
     const list = groupData || [];
     const [year, monthNum] = (selectedMonth || '').split('-').map(Number);
@@ -401,6 +394,10 @@ const buildKassaGroupPrintHtml = ({ selectedMonth, groupData }) => {
 // MAIN COMPONENT
 // ============================================================
 export const Kassa = () => {
+    const navigate = useNavigate();
+    const params = useParams();
+    const transactionId = params.id;
+
     // ---------- State ----------
     const [page, setPage] = useState(1);
     const limit = 300;
@@ -480,6 +477,12 @@ export const Kassa = () => {
     const meta = historyData?.meta || { total: 0, page: 1, totalPages: 1 };
     const totalPages = Math.max(meta.totalPages || 1, 1);
 
+    // ---------- Select transaction from list ----------
+    const selectedTransaction = useMemo(() => {
+        if (!transactionId) return null;
+        return transactions.find(tx => tx._id === transactionId) || null;
+    }, [transactionId, transactions]);
+
     // ---------- Statistikani hisoblash (oylik) ----------
     const monthlyStats = useMemo(() => {
         const now = new Date();
@@ -523,7 +526,7 @@ export const Kassa = () => {
         printHtmlDocument(html, () => showToast('Chop etishda xatolik yuz berdi.', 'error'));
     };
 
-    // ---------- Print: chiqimlar guruhlari hisoboti ----------
+    // ---------- Print: chiqimlar guruhlari ----------
     const handlePrintGroup = () => {
         if (!groupData.length) {
             showToast('Chop etish uchun ma’lumot yo‘q.', 'error');
@@ -706,12 +709,177 @@ export const Kassa = () => {
         setSelectedMonth(e.target.value);
     };
 
+    // ---------- Detail navigation ----------
+    const goToDetail = (id) => {
+        navigate(`/kassa/${id}`);
+    };
+
+    const closeDetail = () => {
+        navigate('/kassa');
+    };
+
     // ---------- Loading state ----------
     const isLoading = balanceLoading || historyLoading;
 
+    // ============================================================
+    // RENDER: Detail Modal (if transactionId exists and transaction found)
+    // ============================================================
+    if (transactionId) {
+        // If still loading list, show a simple loader
+        if (historyLoading) {
+            return (
+                <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                    <div className="bg-white p-8 rounded-2xl shadow-2xl flex flex-col items-center gap-3">
+                        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+                        <p className="text-gray-500">Yuklanmoqda...</p>
+                    </div>
+                </div>
+            );
+        }
+
+        // If not found in list, show error and close button
+        if (!selectedTransaction) {
+            return (
+                <div className="fixed inset-0 z-[200] flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm">
+                    <div className="bg-white max-w-md w-full rounded-2xl shadow-2xl p-6 text-center">
+                        <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-3" />
+                        <h3 className="text-lg font-semibold text-gray-900 mb-1">Operatsiya topilmadi</h3>
+                        <p className="text-sm text-gray-500 mb-6">
+                            Joriy ro‘yxatda bunday ID ga ega operatsiya mavjud emas.
+                        </p>
+                        <button
+                            onClick={closeDetail}
+                            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium"
+                        >
+                            Kassa ro‘yxatiga qaytish
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        const transaction = selectedTransaction;
+        const isIncome = transaction.type === 'KIRIM';
+        const dateStr = transaction.createdAt
+            ? new Date(transaction.createdAt).toLocaleString('uz-UZ', {
+                day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
+            })
+            : '-';
+
+        return (
+            <div
+                className="fixed inset-0 z-[200] flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm"
+                onClick={closeDetail}
+            >
+                <div
+                    className="bg-white w-full max-w-lg rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto p-6 relative pointer-events-auto"
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <button
+                        onClick={closeDetail}
+                        className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 p-1 rounded-full hover:bg-gray-100"
+                    >
+                        <X size={20} />
+                    </button>
+
+                    <div className="flex items-center gap-3 mb-5">
+                        <div className={`p-3 rounded-xl ${isIncome ? 'bg-green-100' : 'bg-red-100'}`}>
+                            {isIncome ? (
+                                <ArrowUpCircle className="w-6 h-6 text-green-600" />
+                            ) : (
+                                <ArrowDownCircle className="w-6 h-6 text-red-600" />
+                            )}
+                        </div>
+                        <div>
+                            <h2 className="text-xl font-bold text-gray-900">
+                                {isIncome ? 'Kirim' : 'Chiqim'} #{transaction._id.slice(-6)}
+                            </h2>
+                            <p className="text-sm text-gray-500">{dateStr}</p>
+                        </div>
+                    </div>
+
+                    <div className="space-y-4">
+                        <div className="grid grid-cols-2 gap-4 p-4 bg-gray-50 rounded-xl">
+                            <div>
+                                <p className="text-xs text-gray-500 font-medium">Turi</p>
+                                <p className="text-sm font-semibold text-gray-900">{transaction.type}</p>
+                            </div>
+                            <div>
+                                <p className="text-xs text-gray-500 font-medium">Summa</p>
+                                <p className={`text-lg font-bold ${isIncome ? 'text-green-600' : 'text-red-600'}`}>
+                                    {isIncome ? '+' : '-'}{Number(transaction.amount).toLocaleString()} $
+                                </p>
+                            </div>
+                            {transaction.balanceAfter !== undefined && (
+                                <div>
+                                    <p className="text-xs text-gray-500 font-medium">Balans (keyin)</p>
+                                    <p className="text-sm font-semibold text-gray-900">
+                                        {Number(transaction.balanceAfter).toLocaleString()} $
+                                    </p>
+                                </div>
+                            )}
+                            <div>
+                                <p className="text-xs text-gray-500 font-medium">Kim tomonidan</p>
+                                <p className="text-sm font-semibold text-gray-900">
+                                    {transaction.user?.name || 'Noma\'lum'}
+                                </p>
+                            </div>
+                        </div>
+
+                        <div>
+                            <p className="text-xs text-gray-500 font-medium">Izoh / Manba</p>
+                            <div className="mt-1 p-3 bg-white border border-gray-200 rounded-lg text-sm text-gray-800 whitespace-pre-wrap">
+                                {transaction.reason || transaction.source || '-'}
+                            </div>
+                        </div>
+
+                        {transaction.client && (
+                            <div>
+                                <div className="flex items-center justify-between gap-5">
+                                    <p className="text-xs text-gray-500 font-medium">Mijoz</p>
+                                    <button onClick={() => navigate(`/clients/${transaction.client._id}`)} className='cursor-pointer'><Info size={20} color='blue' /></button>
+                                </div>
+                                <p className="text-sm font-semibold text-gray-900">
+                                    {transaction.client.name} ({transaction.client.phone || '-'})
+                                </p>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-100">
+                        <button
+                            onClick={closeDetail}
+                            className="px-5 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition text-sm font-medium"
+                        >
+                            Yopish
+                        </button>
+                        <button
+                            onClick={() => {
+                                const html = buildKassaHistoryPrintHtml({
+                                    transactions: [transaction],
+                                    typeFilter: '',
+                                    fromDate: '',
+                                    toDate: '',
+                                    balance: balance,
+                                });
+                                printHtmlDocument(html, () => showToast('Chop etishda xatolik.', 'error'));
+                            }}
+                            className="px-5 py-2.5 bg-gray-700 hover:bg-gray-800 text-white rounded-lg text-sm font-medium shadow-sm transition flex items-center gap-2"
+                        >
+                            <Printer size={16} /> Chop etish
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // ============================================================
+    // RENDER: List View (no transactionId)
+    // ============================================================
     return (
-        <div className="min-h-screen font-sans bg-gray-50/50">
-            <div className="mx-auto px-4 sm:px-6 py-6 max-w-7xl">
+        <div className="min-h-screen font-sans">
+            <div className="mx-auto px-4 sm:px-6 py-6">
                 {/* Header */}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
                     <div>
@@ -814,7 +982,6 @@ export const Kassa = () => {
                     )}
                 </div>
 
-                {/* Transaction History Table */}
                 <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
                     {(historyError || balanceError) ? (
                         <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
@@ -840,6 +1007,7 @@ export const Kassa = () => {
                                         <th className="px-6 py-4 font-semibold text-right">Summa ($)</th>
                                         <th className="px-6 py-4 font-semibold">Izoh</th>
                                         <th className="px-6 py-4 font-semibold">Kim tomonidan</th>
+                                        <th className="px-6 py-4 font-semibold text-right">Amallar</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-100">
@@ -851,11 +1019,12 @@ export const Kassa = () => {
                                                 <td className="px-6 py-4"><div className="h-4 bg-gray-100 rounded w-20 ml-auto" /></td>
                                                 <td className="px-6 py-4"><div className="h-4 bg-gray-100 rounded w-40" /></td>
                                                 <td className="px-6 py-4"><div className="h-4 bg-gray-100 rounded w-24" /></td>
+                                                <td className="px-6 py-4"><div className="h-4 bg-gray-100 rounded w-8 ml-auto" /></td>
                                             </tr>
                                         ))
                                     ) : transactions.length === 0 ? (
                                         <tr>
-                                            <td colSpan={5} className="px-6 py-16 text-center">
+                                            <td colSpan={6} className="px-6 py-16 text-center">
                                                 <FileText className="w-12 h-12 text-gray-300 mx-auto mb-3" />
                                                 <p className="text-gray-600 font-medium mb-1">Operatsiyalar topilmadi</p>
                                                 <p className="text-sm text-gray-400">
@@ -896,6 +1065,15 @@ export const Kassa = () => {
                                                             {tx.user?.name || 'Noma\'lum'}
                                                         </div>
                                                     </td>
+                                                    <td className="px-6 py-4 text-right">
+                                                        <button
+                                                            onClick={() => goToDetail(tx._id)}
+                                                            className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
+                                                            title="Batafsil"
+                                                        >
+                                                            <Eye size={18} />
+                                                        </button>
+                                                    </td>
                                                 </tr>
                                             );
                                         })
@@ -905,7 +1083,6 @@ export const Kassa = () => {
                         </div>
                     )}
 
-                    {/* Pagination */}
                     {!historyError && transactions.length > 0 && (
                         <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200 bg-gray-50/50">
                             <span className="text-sm text-gray-500">
@@ -931,7 +1108,6 @@ export const Kassa = () => {
                     )}
                 </div>
 
-                {/* ====== Income Modal ====== */}
                 {incomeModalOpen && (
                     <div
                         className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm"
@@ -1012,7 +1188,6 @@ export const Kassa = () => {
                     </div>
                 )}
 
-                {/* ====== Expense Modal ====== */}
                 {expenseModalOpen && (
                     <div
                         className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm"
@@ -1093,7 +1268,6 @@ export const Kassa = () => {
                     </div>
                 )}
 
-                {/* ====== Group Modal ====== */}
                 {groupModalOpen && (
                     <div
                         className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/50 backdrop-blur-sm"
@@ -1202,7 +1376,6 @@ export const Kassa = () => {
                     </div>
                 )}
 
-                {/* ====== Toast ====== */}
                 <Toast toast={toast} onClose={() => setToast(null)} />
             </div>
         </div>

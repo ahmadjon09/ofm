@@ -11,12 +11,7 @@ export const Loading = () => {
           }`}
       >
         <div className="flex flex-col items-center justify-center py-12">
-          <div
-            className={`w-16 h-16 border-4 rounded-full animate-spin mb-4 ${dark
-              ? 'border-gray-700 border-t-gray-300'
-              : 'border-blue-200 border-t-blue-600'
-              }`}
-          ></div>
+          <div className="loader"></div>
         </div>
       </section>
     </>

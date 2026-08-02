@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import useSWR from 'swr';
 import api from '../middlewares/fetcher';
 import {
@@ -34,7 +35,30 @@ const STATUS_COLORS = {
   cancelled: 'bg-red-100 text-red-700',
 };
 
-// ---------- Toast ----------
+const useArrowKeyNavigation = (modalOpen) => {
+  useEffect(() => {
+    if (!modalOpen) return;
+    const handleKeyDown = (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      if (e.altKey || e.ctrlKey || e.metaKey) return;
+      const activeElement = document.activeElement;
+      if (!activeElement || !['INPUT', 'TEXTAREA', 'SELECT'].includes(activeElement.tagName)) return;
+      const form = activeElement.closest('form');
+      if (!form) return;
+      const focusableInputs = Array.from(form.querySelectorAll('input, select, textarea'));
+      const currentIndex = focusableInputs.indexOf(activeElement);
+      if (currentIndex === -1) return;
+      let nextIndex = e.key === 'ArrowRight' ? currentIndex + 1 : currentIndex - 1;
+      if (nextIndex >= 0 && nextIndex < focusableInputs.length) {
+        e.preventDefault();
+        focusableInputs[nextIndex].focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [modalOpen]);
+};
+
 const Toast = ({ toast, onClose }) => {
   if (!toast) return null;
   const styles = {
@@ -54,7 +78,6 @@ const Toast = ({ toast, onClose }) => {
   );
 };
 
-// ---------- Confirm Dialog ----------
 const ConfirmDialog = ({ open, title, message, confirmLabel = 'Tasdiqlash', danger = true, onConfirm, onCancel }) => {
   if (!open) return null;
   return (
@@ -84,7 +107,6 @@ const ConfirmDialog = ({ open, title, message, confirmLabel = 'Tasdiqlash', dang
   );
 };
 
-// ---------- Skeleton ----------
 const SkeletonRows = ({ rows = 5 }) => (
   <>
     {Array.from({ length: rows }).map((_, i) => (
@@ -98,7 +120,6 @@ const SkeletonRows = ({ rows = 5 }) => (
   </>
 );
 
-// ---------- Stat Card ----------
 const StatCard = ({ icon: Icon, label, value, color = 'blue' }) => {
   const colorClasses = {
     blue: 'bg-blue-50 text-blue-600',
@@ -121,7 +142,6 @@ const StatCard = ({ icon: Icon, label, value, color = 'blue' }) => {
   );
 };
 
-// ---------- Async Search Select ----------
 const AsyncSearchSelect = ({
   fetchUrl,
   dataKey,
@@ -279,13 +299,11 @@ const AsyncSearchSelect = ({
   );
 };
 
-// ---------- Yordamchi: formatNumber ----------
 const formatNumber = (num, decimals = 2) => {
   if (num === undefined || num === null) return '0';
   return Number(num).toFixed(decimals);
 };
 
-// HTML-ga chiqarilayotgan matnni xavfsizlashtirish (mijoz nomi va h.k.)
 const escapeHtml = (value) => {
   if (value === undefined || value === null) return '';
   return String(value)
@@ -296,11 +314,11 @@ const escapeHtml = (value) => {
     .replace(/'/g, '&#39;');
 };
 
-// ============================================================
-// PRINT: buyurtmani A4 gorizontal, 2 ta bir xil nusxada chop etish
-// Alohida iframe hujjati sifatida quriladi — asosiy sahifa DOM/CSS'iga
-// bog'liq emas, shuning uchun har doim ishonchli va toza chiqadi.
-// ============================================================
+const formatNumberWithCommas = (num) => {
+  if (num === undefined || num === null || isNaN(num)) return '0';
+  return Number(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
 const buildOrderPrintHtml = (order) => {
   const items = order.items || [];
   const total = order.orderTotal || 0;
@@ -311,6 +329,9 @@ const buildOrderPrintHtml = (order) => {
   const statusStr = STATUS_LABELS[order.status] || order.status || '-';
   const clientName = escapeHtml(order.client?.name || 'Noma’lum');
   const clientPhone = escapeHtml(order.client?.phone || '-');
+  const clientDebt = order.client?.debt || 0;
+  const addToDebt = order.addToDebt !== undefined ? order.addToDebt : true;
+  const oldDebt = addToDebt ? clientDebt - total : clientDebt;
 
   const rowsHtml = items
     .map((item, idx) => {
@@ -323,15 +344,15 @@ const buildOrderPrintHtml = (order) => {
           <td>${escapeHtml(item.productCategory || item.productName || '-')}</td>
           <td class="c">${escapeHtml(item.size ?? '-')}</td>
           <td class="c">${item.quantityBoxes || 0}</td>
-          <td class="r">${kg}</td >
-          <td class="r">${formatNumber(price)}</td>
-          <td class="r">${formatNumber(subtotal)}</td>
-        </tr > `;
+          <td class="r">${kg}</td>
+          <td class="r">${formatNumberWithCommas(price)}</td>
+          <td class="r">${formatNumberWithCommas(subtotal)}</td>
+        </tr>`;
     })
     .join('');
 
   const emptyRowsHtml = items.length === 0
-    ? `<tr> <td colspan="7" class="c empty">Mahsulotlar yo‘q</td></> `
+    ? `<tr><td colspan="7" class="c empty">Mahsulotlar yo‘q</td></tr>`
     : '';
 
   const oneCopyHtml = `
@@ -346,18 +367,21 @@ const buildOrderPrintHtml = (order) => {
           <span><b>Telefon:</b> ${clientPhone}</span>
           <span><b>Holat:</b> ${escapeHtml(statusStr)}</span>
         </div>
+        <div class="meta-row" style="border-top:1px dashed #94a3b8; padding-top:4px; margin-top:4px;">
+          <span><b>Eski qarz:</b> ${formatNumberWithCommas(oldDebt)} $</span>
+          <span><b>Jami qarz:</b> ${formatNumberWithCommas(clientDebt)} $</span>
+        </div>
       </header>
-
       <table class="items">
         <thead>
           <tr>
             <th style="width:6%">№</th>
-            <th style="width:30%">Mahsulot</th>
+            <th style="width:28%">Mahsulot</th>
             <th style="width:12%">Razmer</th>
-            <th style="width:10%">SHT</th>
+            <th style="width:8%">SHT</th>
             <th style="width:12%">Kg</th>
             <th style="width:14%">Narx (kg)</th>
-            <th style="width:16%">Summa</th>
+            <th style="width:20%">Summa</th>
           </tr>
         </thead>
         <tbody>
@@ -366,19 +390,18 @@ const buildOrderPrintHtml = (order) => {
         <tfoot>
           <tr>
             <td colspan="3" class="r b">Jami:</td>
-            <td class="c b">${totalBoxes} SHT</td>
-            <td class="r b">${totalKg} kg</td>
+            <td class="c b">${totalBoxes}</td>
+            <td class="r b">${totalKg}</td>
             <td></td>
-            <td class="r b">${formatNumber(total)} $</td>
+            <td class="r b">${formatNumberWithCommas(total)}</td>
           </tr>
         </tfoot>
       </table>
-
       <footer class="sign-row">
         <div class="sign"><div class="sign-line"></div><span>Sotuvchi imzosi</span></div>
         <div class="sign"><div class="sign-line"></div><span>Mijoz imzosi</span></div>
       </footer>
-    </section> `;
+    </section>`;
 
   return `<!DOCTYPE html>
   <html lang="uz">
@@ -386,106 +409,101 @@ const buildOrderPrintHtml = (order) => {
       <meta charset="UTF-8" />
       <title>Buyurtma ${orderNo}</title>
       <style>
-        * {box - sizing: border-box; }
-        html, body {margin: 0; padding: 0; }
+        * {box-sizing: border-box;}
+        html, body {margin:0; padding:0;}
         body {
-          font - family: "Segoe UI", Arial, Helvetica, sans-serif;
-        color: #111827;
-        font-size: 12px;
-  }
-        @page {size: A4 landscape; margin: 8mm; }
-
+          font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+          color: #111827;
+          font-size: 12px;
+        }
+        @page {size: A4 landscape; margin: 8mm;}
         .page-wrapper {
           display: flex;
-        align-items: stretch;
-        gap: 8mm;
-        width: 100%;
-  }
+          align-items: stretch;
+          gap: 8mm;
+          width: 100%;
+        }
         .copy {
           flex: 1 1 0;
-        min-width: 0;
-        border: 1px solid #cbd5e1;
-        border-radius: 6px;
-        padding: 6mm;
-        display: flex;
-        flex-direction: column;
-  }
+          min-width: 0;
+          border: 1px solid #cbd5e1;
+          border-radius: 6px;
+          padding: 6mm;
+          display: flex;
+          flex-direction: column;
+        }
         .copy + .copy {
-          border - left: 2px dashed #94a3b8;
-  }
-
+          border-left: 2px dashed #94a3b8;
+        }
         .head {
-          text - align: center;
-        border-bottom: 2px solid #111827;
-        padding-bottom: 6px;
-        margin-bottom: 8px;
-  }
+          text-align: center;
+          border-bottom: 2px solid #111827;
+          padding-bottom: 6px;
+          margin-bottom: 8px;
+        }
         .head h1 {
           margin: 0 0 6px 0;
-        font-size: 17px;
-        letter-spacing: 0.4px;
-  }
+          font-size: 17px;
+          letter-spacing: 0.4px;
+        }
         .meta-row {
           display: flex;
-        justify-content: space-between;
-        font-size: 11px;
-        margin: 2px 0;
-        color: #1f2937;
-  }
-
+          justify-content: space-between;
+          font-size: 11px;
+          margin: 2px 0;
+          color: #1f2937;
+        }
         table.items {
           width: 100%;
-        border-collapse: collapse;
-        font-size: 11px;
-        table-layout: fixed;
-  }
+          border-collapse: collapse;
+          font-size: 11px;
+          table-layout: fixed;
+        }
         table.items th,
         table.items td {
           border: 1px solid #94a3b8;
-        padding: 5px 6px;
-        text-align: left;
-        word-break: break-word;
-  }
+          padding: 5px 6px;
+          text-align: left;
+          word-break: break-word;
+        }
         table.items thead th {
           background: #f1f5f9;
-        font-weight: 700;
-        text-transform: uppercase;
-        font-size: 9.5px;
-        letter-spacing: 0.3px;
-        text-align: center;
-  }
-        table.items tbody tr:nth-child(even) {background: #f8fafc; }
-        table.items td.c {text - align: center; }
-        table.items td.r {text - align: right; }
-        table.items td.b {font - weight: 700; }
-        table.items td.empty {padding: 14px; color: #9ca3af; }
+          font-weight: 700;
+          text-transform: uppercase;
+          font-size: 9.5px;
+          letter-spacing: 0.3px;
+          text-align: center;
+        }
+        table.items tbody tr:nth-child(even) {background: #f8fafc;}
+        table.items td.c {text-align: center;}
+        table.items td.r {text-align: right;}
+        table.items td.b {font-weight: 700;}
+        table.items td.empty {padding: 14px; color: #9ca3af;}
         table.items tfoot td {
-          border - top: 2px solid #111827;
-        background: #f1f5f9;
-  }
-
+          border-top: 2px solid #111827;
+          background: #f1f5f9;
+        }
         .sign-row {
-          margin - top: auto;
-        padding-top: 16px;
-        display: flex;
-        justify-content: space-between;
-        gap: 20px;
-  }
+          margin-top: auto;
+          padding-top: 16px;
+          display: flex;
+          justify-content: space-between;
+          gap: 20px;
+        }
         .sign {
           flex: 1;
-        text-align: center;
-        font-size: 10.5px;
-        color: #374151;
-  }
+          text-align: center;
+          font-size: 10.5px;
+          color: #374151;
+        }
         .sign-line {
-          border - top: 1px solid #111827;
-        margin-bottom: 4px;
-        height: 26px;
-  }
-
+          border-top: 1px solid #111827;
+          margin-bottom: 4px;
+          height: 26px;
+        }
         @media print {
-    .page - wrapper {page -break-inside: avoid; }
-  }
+          .page-wrapper {page-break-inside: avoid;}
+        }
       </style>
     </head>
     <body>
@@ -497,11 +515,11 @@ const buildOrderPrintHtml = (order) => {
   </html>`;
 };
 
-// ============================================================
-// MAIN COMPONENT
-// ============================================================
 export const Orders = () => {
-  // ---------- List state ----------
+  const navigate = useNavigate();
+  const params = useParams();
+  const orderId = params.id;
+
   const [statusFilter, setStatusFilter] = useState('');
   const [clientFilter, setClientFilter] = useState('');
   const [clientFilterLabel, setClientFilterLabel] = useState('');
@@ -510,10 +528,8 @@ export const Orders = () => {
   const [page, setPage] = useState(1);
   const limit = 10;
 
-  // ---------- Detail state ----------
   const [selectedOrder, setSelectedOrder] = useState(null);
 
-  // ---------- Create modal ----------
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createErrors, setCreateErrors] = useState({});
@@ -532,16 +548,17 @@ export const Orders = () => {
     items: [{ ...emptyItem }],
   });
 
-  // ---------- Status update modal ----------
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [statusOrder, setStatusOrder] = useState(null);
   const [newStatus, setNewStatus] = useState('pending');
   const [statusSaving, setStatusSaving] = useState(false);
 
-  // ---------- Confirm & Toast ----------
   const [confirmState, setConfirmState] = useState(null);
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
+
+  useArrowKeyNavigation(createModalOpen);
+  useArrowKeyNavigation(statusModalOpen);
 
   const showToast = useCallback((message, type = 'info') => {
     setToast({ message, type });
@@ -551,7 +568,6 @@ export const Orders = () => {
 
   useEffect(() => () => toastTimer.current && clearTimeout(toastTimer.current), []);
 
-  // ---------- Build query ----------
   const buildQuery = useCallback(() => {
     const params = new URLSearchParams({ page, limit });
     if (statusFilter) params.append('status', statusFilter);
@@ -561,9 +577,8 @@ export const Orders = () => {
     return params.toString();
   }, [page, limit, statusFilter, clientFilter, fromDate, toDate]);
 
-  // ---------- SWR for list ----------
   const { data, error, isLoading, isValidating, mutate } = useSWR(
-    `${ORDERS_URL}?${buildQuery()} `,
+    `${ORDERS_URL}?${buildQuery()}`,
     (url) => api.get(url).then((res) => res.data),
     { keepPreviousData: true, revalidateOnFocus: false }
   );
@@ -572,7 +587,19 @@ export const Orders = () => {
   const meta = data?.meta || { total: 0, page: 1, totalPages: 1 };
   const totalPages = Math.max(meta.totalPages || 1, 1);
 
-  // ---------- List handlers ----------
+  const {
+    data: orderDetailData,
+    error: detailError,
+    isLoading: detailLoading,
+    mutate: mutateDetail,
+  } = useSWR(
+    orderId ? `${ORDERS_URL}/${orderId}` : null,
+    (url) => api.get(url).then((res) => res.data),
+    { revalidateOnFocus: true }
+  );
+
+  const order = orderDetailData?.data?.order;
+
   const clearFilters = () => {
     setStatusFilter('');
     setClientFilter('');
@@ -581,12 +608,12 @@ export const Orders = () => {
     setToDate('');
     setPage(1);
   };
+
   const goToPage = (p) => {
     if (p < 1 || p > totalPages) return;
     setPage(p);
   };
 
-  // Close modals on Escape
   useEffect(() => {
     const handler = (e) => {
       if (e.key === 'Escape') {
@@ -598,7 +625,6 @@ export const Orders = () => {
     return () => window.removeEventListener('keydown', handler);
   }, [createModalOpen, creating, statusModalOpen, statusSaving]);
 
-  // ---------- Create modal ----------
   const openCreateModal = () => {
     setCreateForm({
       clientId: '',
@@ -633,7 +659,7 @@ export const Orders = () => {
     const newItems = [...createForm.items];
     newItems[index] = { ...newItems[index], [field]: value };
     setCreateForm({ ...createForm, items: newItems });
-    setCreateErrors((prev) => ({ ...prev, [`item - ${index} -${field} `]: undefined }));
+    setCreateErrors((prev) => ({ ...prev, [`item-${index}-${field}`]: undefined }));
   };
 
   const handleItemProductSelect = (index, opt) => {
@@ -649,8 +675,8 @@ export const Orders = () => {
     setCreateForm({ ...createForm, items: newItems });
     setCreateErrors((prev) => ({
       ...prev,
-      [`item - ${index} -productId`]: undefined,
-      [`item - ${index} -size`]: undefined,
+      [`item-${index}-productId`]: undefined,
+      [`item-${index}-size`]: undefined,
     }));
   };
 
@@ -664,7 +690,7 @@ export const Orders = () => {
       price: item.price || (sizeEntry ? String(sizeEntry.price) : ''),
     };
     setCreateForm({ ...createForm, items: newItems });
-    setCreateErrors((prev) => ({ ...prev, [`item - ${index} -size`]: undefined }));
+    setCreateErrors((prev) => ({ ...prev, [`item-${index}-size`]: undefined }));
   };
 
   const addItemRow = () => {
@@ -686,12 +712,12 @@ export const Orders = () => {
     const errors = {};
     if (!createForm.clientId) errors.clientId = 'Mijoz tanlanishi shart.';
     createForm.items.forEach((item, i) => {
-      if (!item.productId) errors[`item - ${i} -productId`] = 'Mahsulot tanlang.';
-      if (!item.size) errors[`item - ${i} -size`] = 'Razmer tanlang.';
-      if (!item.price || Number(item.price) <= 0) errors[`item - ${i} -price`] = 'Narx 0 dan katta bo‘lishi kerak.';
+      if (!item.productId) errors[`item-${i}-productId`] = 'Mahsulot tanlang.';
+      if (!item.size) errors[`item-${i}-size`] = 'Razmer tanlang.';
+      if (!item.price || Number(item.price) <= 0) errors[`item-${i}-price`] = 'Narx 0 dan katta bo‘lishi kerak.';
       const boxes = Number(item.quantityBoxes);
       if (!item.quantityBoxes || !Number.isInteger(boxes) || boxes <= 0) {
-        errors[`item - ${i} -quantityBoxes`] = 'SHTlar soni musbat butun son bo‘lishi kerak.';
+        errors[`item-${i}-quantityBoxes`] = 'SHTlar soni musbat butun son bo‘lishi kerak.';
       }
     });
     setCreateErrors(errors);
@@ -729,7 +755,6 @@ export const Orders = () => {
     }
   };
 
-  // ---------- Status update ----------
   const openStatusModal = (order) => {
     setStatusOrder(order);
     setNewStatus(order.status);
@@ -752,11 +777,11 @@ export const Orders = () => {
 
     setStatusSaving(true);
     try {
-      await api.patch(`${ORDERS_URL} /${statusOrder._id}/status`, { status: newStatus });
+      await api.patch(`${ORDERS_URL}/${statusOrder._id}/status`, { status: newStatus });
       showToast('Holat yangilandi.', 'success');
       await mutate();
-      if (selectedOrder && selectedOrder._id === statusOrder._id) {
-        setSelectedOrder({ ...selectedOrder, status: newStatus });
+      if (orderId && statusOrder._id === orderId) {
+        mutateDetail();
       }
       setStatusModalOpen(false);
     } catch (err) {
@@ -766,7 +791,6 @@ export const Orders = () => {
     }
   };
 
-  // ---------- Delete ----------
   const requestDeleteOrder = (order) =>
     setConfirmState({ type: 'delete-order', payload: order });
 
@@ -777,10 +801,13 @@ export const Orders = () => {
       if (type === 'delete-order') {
         await api.delete(`${ORDERS_URL}/${payload._id}`);
         showToast('Buyurtma o‘chirildi.', 'success');
-        if (selectedOrder && selectedOrder._id === payload._id) {
-          setSelectedOrder(null);
+        if (orderId && payload._id === orderId) {
+          navigate('/orders');
         }
         await mutate();
+        if (orderId && payload._id === orderId) {
+          mutateDetail();
+        }
       }
     } catch (err) {
       showToast(err.response?.data?.message || err.message || 'Amalni bajarib bo‘lmadi.', 'error');
@@ -799,20 +826,21 @@ export const Orders = () => {
     },
   };
 
-  // ---------- Navigation ----------
-  const goToDetail = (order) => setSelectedOrder(order);
-  const goToList = () => setSelectedOrder(null);
+  const goToDetail = (order) => {
+    navigate(`/orders/${order._id}`);
+  };
 
-  // ---------- Print function ----------
-  // Asosiy oyna (window.print()) o'rniga alohida, ko'rinmas iframe ichida
-  // mustaqil HTML hujjat yaratiladi va o'sha yerdan chop etiladi. Shu tufayli
-  // ilova sahifasidagi boshqa elementlar/CSS chop etishga hech qanday ta'sir
-  // qilmaydi va natija har doim toza, kutilganidek chiqadi.
+  const goToList = () => {
+    navigate('/orders');
+  };
+
   const handlePrint = () => {
-    if (!selectedOrder) return;
-
-    const html = buildOrderPrintHtml(selectedOrder);
-
+    if (!order) return;
+    // Get client from list if available, else from order detail
+    const listOrder = orders.find(o => o._id === orderId);
+    const client = listOrder?.client || order?.client;
+    const orderWithClient = { ...order, client };
+    const html = buildOrderPrintHtml(orderWithClient);
     const iframe = document.createElement('iframe');
     iframe.style.position = 'fixed';
     iframe.style.right = '0';
@@ -842,24 +870,49 @@ export const Orders = () => {
       }
     };
 
-    // Rasmlar/shriftlar joylashib bo'lguncha kichik kechikish bilan chop etish
     iframe.onload = () => setTimeout(triggerPrint, 80);
-
     if (iframe.contentWindow) {
       iframe.contentWindow.onafterprint = cleanup;
     }
-    // Zaxira: agar onafterprint ishlamasa, iframe baribir tozalanadi
     setTimeout(cleanup, 60000);
   };
 
-  // ============================================================
-  // RENDER: DETAIL VIEW
-  // ============================================================
-  if (selectedOrder) {
-    const order = selectedOrder;
+  const renderDetail = () => {
+    if (detailLoading) {
+      return (
+        <div className="min-h-screen bg-white flex items-center justify-center">
+          <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+          <span className="ml-3 text-gray-600">Yuklanmoqda...</span>
+        </div>
+      );
+    }
+    if (detailError || !order) {
+      return (
+        <div className="min-h-screen bg-white flex items-center justify-center px-4">
+          <div className="bg-white rounded-2xl shadow-lg p-8 max-w-md w-full text-center">
+            <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Buyurtma topilmadi</h3>
+            <p className="text-sm text-gray-500 mb-6">
+              {detailError?.response?.data?.message || 'Buyurtma mavjud emas yoki o‘chirilgan.'}
+            </p>
+            <button
+              onClick={goToList}
+              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium"
+            >
+              Buyurtmalar ro‘yxatiga qaytish
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Get client from list (if available) or from detail
+    const listOrder = orders.find(o => o._id === orderId);
+    const client = listOrder?.client || order?.client;
+
     const total = order.orderTotal || 0;
     const totalBoxes = order.items?.reduce((sum, item) => sum + (item.quantityBoxes || 0), 0) || 0;
-
+    const totalKg = order.items?.reduce((sum, item) => sum + (item.quantityKg || 0), 0) || 0;
 
     return (
       <div className="min-h-screen bg-white py-6 px-4 sm:px-6">
@@ -871,17 +924,29 @@ export const Orders = () => {
             >
               <ArrowLeft size={18} /> Buyurtmalar ro‘yxati
             </button>
-            <button
-              onClick={handlePrint}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
-            >
-              <Printer size={18} /> Chop etish
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handlePrint}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
+              >
+                <Printer size={18} /> Chop etish
+              </button>
+              <button
+                onClick={() => openStatusModal(order)}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
+              >
+                <Pencil size={16} /> Holat
+              </button>
+              <button
+                onClick={() => requestDeleteOrder(order)}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
+              >
+                <Trash2 size={16} /> O‘chirish
+              </button>
+            </div>
           </div>
 
-          {/* Screen view (non-printable) */}
           <div className="bg-white rounded-2xl shadow-md border border-gray-200 overflow-hidden">
-            {/* Header */}
             <div className="px-6 py-5 border-b border-gray-200 flex flex-wrap items-start justify-between gap-4">
               <div>
                 <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-3">
@@ -891,7 +956,7 @@ export const Orders = () => {
                 <div className="flex items-center gap-3 mt-1 flex-wrap">
                   <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
                     <User size={14} />
-                    {order.client?.name || 'Noma’lum'}
+                    {client?.name || 'Noma’lum'}
                   </span>
                   <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[order.status]}`}>
                     {STATUS_LABELS[order.status] || order.status}
@@ -901,44 +966,28 @@ export const Orders = () => {
                   </span>
                 </div>
               </div>
-              <div className="flex gap-2 flex-wrap">
-                {/* <button
-                  onClick={() => openStatusModal(order)}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
-                >
-                  <Pencil size={16} /> Holatni o‘zgartirish
-                </button>
-                <button
-                  onClick={() => requestDeleteOrder(order)}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
-                >
-                  <Trash2 size={16} /> O‘chirish
-                </button> */}
-              </div>
             </div>
 
-            {/* Stats */}
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 p-6 bg-white border-b border-gray-200">
               <StatCard icon={DollarSign} label="Jami summa" value={`${formatNumber(total)} $`} color="green" />
               <StatCard icon={Package} label="Mahsulotlar soni" value={order.items?.length || 0} color="blue" />
               <StatCard
                 icon={User}
                 label="Mijoz"
-                value={order.client?.name || 'Noma’lum'}
+                value={client?.name || 'Noma’lum'}
                 color="purple"
               />
               <StatCard
                 icon={DollarSign}
                 label="Mijoz qarzi"
-                value={`${formatNumber(order.client?.debt || 0)} $`}
+                value={`${formatNumber(client?.debt || 0)} $`}
                 color="purple"
               />
             </div>
 
-            {/* Items table */}
             <div className="p-6">
               <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-4">
-                Mahsulotlar ({order.items?.length || 0}) | Jami SHT: {totalBoxes}
+                Mahsulotlar ({order.items?.length || 0})
               </h3>
               {order.items?.length === 0 ? (
                 <div className="text-center py-8 text-gray-400 text-sm">
@@ -975,7 +1024,11 @@ export const Orders = () => {
                         );
                       })}
                       <tr className="bg-white font-semibold border-t-2 border-gray-200">
-                        <td colSpan="5" className="px-4 py-3 text-right text-gray-700">Jami:</td>
+                        <td className="px-4 py-3 text-gray-700">Jami:</td>
+                        <td className="px-4 py-3"></td>
+                        <td className="px-4 py-3 text-center text-gray-900">{totalBoxes}</td>
+                        <td className="px-4 py-3 text-right text-gray-900">{totalKg} kg</td>
+                        <td className="px-4 py-3"></td>
                         <td className="px-4 py-3 text-right text-emerald-700">{formatNumber(total)} $</td>
                       </tr>
                     </tbody>
@@ -990,21 +1043,14 @@ export const Orders = () => {
               <span>Yangilangan: {new Date(order.updatedAt).toLocaleString('uz-UZ')}</span>
             </div>
           </div>
-
         </div>
-
-        {/* Modals are rendered at the end of the component */}
       </div>
     );
-  }
+  };
 
-  // ============================================================
-  // RENDER: LIST VIEW
-  // ============================================================
-  return (
+  const renderList = () => (
     <div className="min-h-screen bg-white font-sans">
       <div className="mx-auto px-4 sm:px-6 py-6">
-        {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Buyurtmalar</h1>
@@ -1020,7 +1066,6 @@ export const Orders = () => {
           </button>
         </div>
 
-        {/* Toolbar */}
         <div className="bg-white rounded-2xl border border-gray-200 p-4 mb-4 flex flex-col md:flex-row gap-3 md:items-center">
           <div className="flex-1 min-w-[220px]">
             <AsyncSearchSelect
@@ -1059,14 +1104,12 @@ export const Orders = () => {
             value={fromDate}
             onChange={(e) => { setFromDate(e.target.value); setPage(1); }}
             className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-            placeholder="Dan"
           />
           <input
             type="date"
             value={toDate}
             onChange={(e) => { setToDate(e.target.value); setPage(1); }}
             className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-            placeholder="Gacha"
           />
           {(statusFilter || clientFilter || fromDate || toDate) && (
             <button
@@ -1078,7 +1121,6 @@ export const Orders = () => {
           )}
         </div>
 
-        {/* Content */}
         <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
           {error ? (
             <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
@@ -1155,14 +1197,14 @@ export const Orders = () => {
                         <td className="px-4 py-4">
                           <div className="flex justify-end gap-1">
                             <button
-                              onClick={() => openStatusModal(order)}
+                              onClick={(e) => { e.stopPropagation(); openStatusModal(order); }}
                               className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition"
                               title="Holatni o‘zgartirish"
                             >
                               <Pencil size={18} />
                             </button>
                             <button
-                              onClick={() => requestDeleteOrder(order)}
+                              onClick={(e) => { e.stopPropagation(); requestDeleteOrder(order); }}
                               className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
                               title="O‘chirish"
                             >
@@ -1178,7 +1220,6 @@ export const Orders = () => {
             </div>
           )}
 
-          {/* Pagination */}
           {!error && orders.length > 0 && (
             <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 text-sm">
               <span className="text-gray-500">
@@ -1203,205 +1244,196 @@ export const Orders = () => {
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
 
-        {/* ====== Create Order Modal ====== */}
-        {createModalOpen && (
+  return (
+    <>
+      {orderId ? renderDetail() : renderList()}
+
+      {createModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/40 backdrop-blur-sm"
+          onClick={closeCreateModal}
+        >
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/40 backdrop-blur-sm"
-            onClick={closeCreateModal}
+            className="bg-white w-full max-w-4xl rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto p-6 relative pointer-events-auto"
+            onClick={(e) => e.stopPropagation()}
           >
-            <div
-              className="bg-white w-full max-w-4xl rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto p-6 relative pointer-events-auto"
-              onClick={(e) => e.stopPropagation()}
+            <button
+              onClick={closeCreateModal}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 disabled:opacity-40"
+              disabled={creating}
             >
-              <button
-                onClick={closeCreateModal}
-                className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 disabled:opacity-40"
-                disabled={creating}
-              >
-                <X size={24} />
-              </button>
+              <X size={24} />
+            </button>
 
-              <h2 className="text-2xl font-bold text-gray-900 mb-1">Yangi buyurtma</h2>
-              <p className="text-sm text-gray-500 mb-6">Barcha maydonlarni to‘ldiring.</p>
+            <h2 className="text-2xl font-bold text-gray-900 mb-1">Yangi buyurtma</h2>
+            <p className="text-sm text-gray-500 mb-6">Barcha maydonlarni to‘ldiring.</p>
 
-              <form onSubmit={handleCreateSubmit} className="space-y-5">
-                {/* Client - Server search */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Mijoz *</label>
-                  <AsyncSearchSelect
-                    fetchUrl={CLIENTS_URL}
-                    dataKey="clients"
-                    value={createForm.clientId}
-                    displayValue={createForm.clientLabel}
-                    onSelect={handleClientSelect}
-                    placeholder="Mijoz qidirish (ism yoki tel)..."
-                    labelKey="name"
-                    subLabelKey="phone"
-                    error={!!createErrors.clientId}
-                    emptyText="Mijoz topilmadi"
-                  />
-                  {createErrors.clientId && (
-                    <p className="text-xs text-red-500 mt-1">{createErrors.clientId}</p>
-                  )}
-                </div>
+            <form onSubmit={handleCreateSubmit} className="space-y-5">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Mijoz *</label>
+                <AsyncSearchSelect
+                  fetchUrl={CLIENTS_URL}
+                  dataKey="clients"
+                  value={createForm.clientId}
+                  displayValue={createForm.clientLabel}
+                  onSelect={handleClientSelect}
+                  placeholder="Mijoz qidirish (ism yoki tel)..."
+                  labelKey="name"
+                  subLabelKey="phone"
+                  error={!!createErrors.clientId}
+                  emptyText="Mijoz topilmadi"
+                />
+                {createErrors.clientId && (
+                  <p className="text-xs text-red-500 mt-1">{createErrors.clientId}</p>
+                )}
+              </div>
 
-                {/* Items */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm font-medium text-gray-700">Mahsulotlar *</label>
-                    <button
-                      type="button"
-                      onClick={addItemRow}
-                      className="text-sm text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
-                    >
-                      <Plus size={16} /> Qo‘shish
-                    </button>
-                  </div>
-                  <div className="space-y-3">
-                    {createForm.items.map((item, idx) => {
-                      const sizes = item.productSizes || [];
-                      return (
-                        <div
-                          key={idx}
-                          className="flex flex-wrap items-start gap-3 p-3 bg-white rounded-lg border border-gray-200"
-                        >
-                          {/* Product - Server search */}
-                          <div className="flex-1 min-w-[150px]">
-                            <label className="block text-xs text-gray-500 mb-0.5">Mahsulot</label>
-                            <AsyncSearchSelect
-                              fetchUrl={PRODUCTS_URL}
-                              dataKey="products"
-                              value={item.productId}
-                              displayValue={item.productLabel}
-                              onSelect={(opt) => handleItemProductSelect(idx, opt)}
-                              placeholder="Mahsulot qidirish..."
-                              labelKey="name"
-                              subLabelKey="category"
-                              error={!!createErrors[`item-${idx}-productId`]}
-                              emptyText="Mahsulot topilmadi"
-                            />
-                            {createErrors[`item-${idx}-productId`] && (
-                              <p className="text-xs text-red-500 mt-1">{createErrors[`item-${idx}-productId`]}</p>
-                            )}
-                          </div>
-
-                          {/* Size dropdown */}
-                          <div className="flex-1 min-w-[80px]">
-                            <label className="block text-xs text-gray-500 mb-0.5">Razmer</label>
-                            <select
-                              value={item.size}
-                              onChange={(e) => handleItemSizeChange(idx, e.target.value)}
-                              className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white ${createErrors[`item-${idx}-size`] ? 'border-red-400' : 'border-gray-300'
-                                }`}
-                              disabled={!item.productId}
-                            >
-                              <option value="">Tanlang</option>
-                              {sizes.map((s) => (
-                                <option key={s.size} value={s.size}>
-                                  {s.size} (SHT: {s.boxes}, {s.total} kg mavjud)
-                                </option>
-                              ))}
-                            </select>
-                            {createErrors[`item-${idx}-size`] && (
-                              <p className="text-xs text-red-500 mt-1">{createErrors[`item-${idx}-size`]}</p>
-                            )}
-                          </div>
-
-                          {/* Price (manual) */}
-                          <div className="flex-1 min-w-[80px]">
-                            <label className="block text-xs text-gray-500 mb-0.5">Narx (kg / $)</label>
-                            <input
-                              type="number"
-                              step="0.01"
-                              min="0.01"
-                              value={item.price}
-                              onChange={(e) => handleItemChange(idx, 'price', e.target.value)}
-                              className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none ${createErrors[`item-${idx}-price`] ? 'border-red-400' : 'border-gray-300'
-                                }`}
-                              placeholder="0.00"
-                            />
-                            {createErrors[`item-${idx}-price`] && (
-                              <p className="text-xs text-red-500 mt-1">{createErrors[`item-${idx}-price`]}</p>
-                            )}
-                          </div>
-
-                          {/* Quantity Boxes */}
-                          <div className="flex-1 min-w-[80px]">
-                            <label className="block text-xs text-gray-500 mb-0.5">Miqdor (SHT)</label>
-                            <input
-                              type="number"
-                              step="1"
-                              min="1"
-                              value={item.quantityBoxes}
-                              onChange={(e) => handleItemChange(idx, 'quantityBoxes', e.target.value)}
-                              className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none ${createErrors[`item-${idx}-quantityBoxes`] ? 'border-red-400' : 'border-gray-300'
-                                }`}
-                              placeholder="0"
-                            />
-                            {createErrors[`item-${idx}-quantityBoxes`] && (
-                              <p className="text-xs text-red-500 mt-1">{createErrors[`item-${idx}-quantityBoxes`]}</p>
-                            )}
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => removeItemRow(idx)}
-                            className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition self-center mt-4 disabled:opacity-30 disabled:cursor-not-allowed"
-                            disabled={createForm.items.length <= 1}
-                            title={createForm.items.length <= 1 ? 'Kamida bitta mahsulot qolishi kerak' : 'Olib tashlash'}
-                          >
-                            <X size={18} />
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Add to debt toggle */}
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    name="addToDebt"
-                    checked={createForm.addToDebt}
-                    onChange={handleCreateChange}
-                    className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                  />
-                  <label className="text-sm text-gray-700">Mijoz qarziga qo‘shish</label>
-                </div>
-
-                <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium text-gray-700">Mahsulotlar *</label>
                   <button
                     type="button"
-                    onClick={closeCreateModal}
-                    disabled={creating}
-                    className="px-5 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-white transition text-sm font-medium disabled:opacity-50"
+                    onClick={addItemRow}
+                    className="text-sm text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
                   >
-                    Bekor qilish
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={creating}
-                    className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
-                  >
-                    {creating && <Loader2 className="w-4 h-4 animate-spin" />}
-                    Yaratish
+                    <Plus size={16} /> Qo‘shish
                   </button>
                 </div>
-              </form>
-            </div>
+                <div className="space-y-3">
+                  {createForm.items.map((item, idx) => {
+                    const sizes = item.productSizes || [];
+                    return (
+                      <div
+                        key={idx}
+                        className="flex flex-wrap items-start gap-3 p-3 bg-white rounded-lg border border-gray-200"
+                      >
+                        <div className="flex-1 min-w-[150px]">
+                          <label className="block text-xs text-gray-500 mb-0.5">Mahsulot</label>
+                          <AsyncSearchSelect
+                            fetchUrl={PRODUCTS_URL}
+                            dataKey="products"
+                            value={item.productId}
+                            displayValue={item.productLabel}
+                            onSelect={(opt) => handleItemProductSelect(idx, opt)}
+                            placeholder="Mahsulot qidirish..."
+                            labelKey="name"
+                            subLabelKey="category"
+                            error={!!createErrors[`item-${idx}-productId`]}
+                            emptyText="Mahsulot topilmadi"
+                          />
+                          {createErrors[`item-${idx}-productId`] && (
+                            <p className="text-xs text-red-500 mt-1">{createErrors[`item-${idx}-productId`]}</p>
+                          )}
+                        </div>
+
+                        <div className="flex-1 min-w-[80px]">
+                          <label className="block text-xs text-gray-500 mb-0.5">Razmer</label>
+                          <select
+                            value={item.size}
+                            onChange={(e) => handleItemSizeChange(idx, e.target.value)}
+                            className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white ${createErrors[`item-${idx}-size`] ? 'border-red-400' : 'border-gray-300'
+                              }`}
+                            disabled={!item.productId}
+                          >
+                            <option value="">Tanlang</option>
+                            {sizes.map((s) => (
+                              <option key={s.size} value={s.size}>
+                                {s.size} (SHT: {s.boxes}, {s.total} kg mavjud)
+                              </option>
+                            ))}
+                          </select>
+                          {createErrors[`item-${idx}-size`] && (
+                            <p className="text-xs text-red-500 mt-1">{createErrors[`item-${idx}-size`]}</p>
+                          )}
+                        </div>
+
+                        <div className="flex-1 min-w-[80px]">
+                          <label className="block text-xs text-gray-500 mb-0.5">Narx (kg / $)</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0.01"
+                            value={item.price}
+                            onChange={(e) => handleItemChange(idx, 'price', e.target.value)}
+                            className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none ${createErrors[`item-${idx}-price`] ? 'border-red-400' : 'border-gray-300'
+                              }`}
+                            placeholder="0.00"
+                          />
+                          {createErrors[`item-${idx}-price`] && (
+                            <p className="text-xs text-red-500 mt-1">{createErrors[`item-${idx}-price`]}</p>
+                          )}
+                        </div>
+
+                        <div className="flex-1 min-w-[80px]">
+                          <label className="block text-xs text-gray-500 mb-0.5">Miqdor (SHT)</label>
+                          <input
+                            type="number"
+                            step="1"
+                            min="1"
+                            value={item.quantityBoxes}
+                            onChange={(e) => handleItemChange(idx, 'quantityBoxes', e.target.value)}
+                            className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none ${createErrors[`item-${idx}-quantityBoxes`] ? 'border-red-400' : 'border-gray-300'
+                              }`}
+                            placeholder="0"
+                          />
+                          {createErrors[`item-${idx}-quantityBoxes`] && (
+                            <p className="text-xs text-red-500 mt-1">{createErrors[`item-${idx}-quantityBoxes`]}</p>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => removeItemRow(idx)}
+                          className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition self-center mt-4 disabled:opacity-30 disabled:cursor-not-allowed"
+                          disabled={createForm.items.length <= 1}
+                          title={createForm.items.length <= 1 ? 'Kamida bitta mahsulot qolishi kerak' : 'Olib tashlash'}
+                        >
+                          <X size={18} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  name="addToDebt"
+                  checked={createForm.addToDebt}
+                  onChange={handleCreateChange}
+                  className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                />
+                <label className="text-sm text-gray-700">Mijoz qarziga qo‘shish</label>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+                <button
+                  type="button"
+                  onClick={closeCreateModal}
+                  disabled={creating}
+                  className="px-5 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-white transition text-sm font-medium disabled:opacity-50"
+                >
+                  Bekor qilish
+                </button>
+                <button
+                  type="submit"
+                  disabled={creating}
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                >
+                  {creating && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Yaratish
+                </button>
+              </div>
+            </form>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* 
-         GLOBAL MODALS 
-         These are placed outside the conditional rendering of List/Detail views 
-         so they work in both contexts.
-      */}
-
-      {/* Status Update Modal */}
       {statusModalOpen && statusOrder && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/40 backdrop-blur-sm"
@@ -1464,7 +1496,6 @@ export const Orders = () => {
         </div>
       )}
 
-      {/* Confirm Dialog */}
       <ConfirmDialog
         open={!!confirmState}
         title={confirmState ? confirmCopy[confirmState.type].title : ''}
@@ -1475,8 +1506,7 @@ export const Orders = () => {
         onCancel={() => setConfirmState(null)}
       />
 
-      {/* Toast */}
       <Toast toast={toast} onClose={() => setToast(null)} />
-    </div>
+    </>
   );
 };

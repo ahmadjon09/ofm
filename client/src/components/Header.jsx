@@ -28,14 +28,11 @@ export const Header = () => {
     return (
         <>
             <header className="fixed top-0 left-0 right-0 z-50 border-b border-gray-200 bg-white shadow-sm">
-                <div className="max-w-7xl mx-auto flex h-16 items-center justify-between px-4 sm:px-6">
-                    {/* Logo */}
+                <div className="container mx-auto flex h-16 items-center justify-between px-4 sm:px-6">
                     <Link to="/" className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                        <span className="text-blue-600">●</span> OFM
+                        OFM
                     </Link>
-
-                    {/* Desktop Navigation */}
-                    <nav className="hidden items-center gap-1 lg:flex">
+                    <nav className="hidden items-center gap-1 md:flex">
                         {links.map((link) => (
                             <NavLink
                                 key={link.path}
@@ -88,7 +85,7 @@ export const Header = () => {
                         {/* Mobile menu button */}
                         <button
                             onClick={() => setOpen(!open)}
-                            className="rounded-lg p-2 text-gray-600 hover:bg-gray-100 lg:hidden"
+                            className="rounded-lg p-2 text-gray-600 hover:bg-gray-100 md:hidden"
                         >
                             {open ? <X size={20} /> : <Menu size={20} />}
                         </button>
@@ -97,7 +94,7 @@ export const Header = () => {
 
                 {/* Mobile menu */}
                 {open && (
-                    <nav className="border-t border-gray-200 bg-white lg:hidden">
+                    <nav className="border-t border-gray-200 bg-white md:hidden">
                         {links.map((link) => (
                             <NavLink
                                 key={link.path}

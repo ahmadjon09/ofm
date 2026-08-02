@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import useSWR from 'swr';
 import api from '../middlewares/fetcher';
 import {
@@ -114,14 +115,15 @@ const StatCard = ({ icon: Icon, label, value, color = 'blue' }) => {
 // MAIN COMPONENT
 // ============================================================
 export const Clients = () => {
+    const navigate = useNavigate();
+    const params = useParams();
+    const clientId = params.id; // route pattern /clients/:id
+
     // ---------- List state ----------
     const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
     const [page, setPage] = useState(1);
     const limit = 30;
-
-    // ---------- Detail state (ID) ----------
-    const [selectedClientId, setSelectedClientId] = useState(null);
 
     // ---------- Modal states ----------
     const [modalOpen, setModalOpen] = useState(false);
@@ -160,14 +162,20 @@ export const Clients = () => {
     }, [page, limit, search]);
 
     // ---------- SWR for list ----------
-    const { data, error, isLoading, isValidating, mutate } = useSWR(
+    const {
+        data: listData,
+        error: listError,
+        isLoading: listLoading,
+        isValidating: listValidating,
+        mutate: mutateList,
+    } = useSWR(
         `${CLIENTS_URL}?${buildQuery()}`,
         (url) => api.get(url).then((res) => res.data),
         { keepPreviousData: true, revalidateOnFocus: false }
     );
 
-    const clients = data?.data?.clients || [];
-    const meta = data?.meta || { total: 0, page: 1, totalPages: 1 };
+    const clients = listData?.data?.clients || [];
+    const meta = listData?.meta || { total: 0, page: 1, totalPages: 1 };
     const totalPages = Math.max(meta.totalPages || 1, 1);
 
     // ---------- SWR for detail ----------
@@ -177,7 +185,7 @@ export const Clients = () => {
         isLoading: detailLoading,
         mutate: mutateDetail,
     } = useSWR(
-        selectedClientId ? `${CLIENTS_URL}/${selectedClientId}` : null,
+        clientId ? `${CLIENTS_URL}/${clientId}` : null,
         (url) => api.get(url).then((res) => res.data),
         { revalidateOnFocus: true }
     );
@@ -260,15 +268,52 @@ export const Clients = () => {
 
     // ---------- Payment modal helpers ----------
     const openPaymentModal = (client) => {
+        // We need the client object, so we set it via state or just use the current client from detail
+        // In list view we have the client object, in detail view we have 'client' from SWR.
+        // We'll store the clientId and the actual client in a ref? Actually we can derive from the current clientId.
+        // But we need the debt for the quick buttons. We'll use the client object passed or the current client from detail.
+        // We'll store the clientId and also the debt in a state? Better: set selectedClientId and open modal.
+        // For list, we already have the client object; for detail, we have client from SWR.
+        // We'll store the clientId and the debt in a ref? Let's just use the client object passed.
+        // But in detail, we might not have the client object when the modal opens from list? Actually we'll have it.
+        // We'll store the current client object in a ref when opening payment modal.
+        // Simpler: set selectedClientId and when modal opens, we use the client from SWR if clientId matches.
         setSelectedClientId(client._id);
         setPaymentForm({ amount: '', note: '' });
         setPaymentErrors({});
         setPaymentModalOpen(true);
     };
 
+    // We need to store the client ID for payment modal to know which client to pay.
+    // We already have clientId from URL, but payment could be from list (not in detail).
+    // So we'll use a separate state for payment client ID.
+    const [paymentClientId, setPaymentClientId] = useState(null);
+
+    // We'll modify openPaymentModal to set paymentClientId.
+    const openPaymentModalWithClient = (client) => {
+        setPaymentClientId(client._id);
+        setPaymentForm({ amount: '', note: '' });
+        setPaymentErrors({});
+        setPaymentModalOpen(true);
+    };
+
+    // For payment, we need the client data. We'll either use the client from SWR if paymentClientId === clientId,
+    // or we'll fetch it separately. Since we already have the list data, we can find the client in the list.
+    // For simplicity, we'll use the client object from the list or detail.
+    // We'll create a helper to get the current client for payment.
+    const getPaymentClient = () => {
+        if (paymentClientId === clientId && client) return client;
+        // fallback: find in list
+        return clients.find(c => c._id === paymentClientId) || null;
+    };
+
+    // But we also need debt for quick buttons. We'll use the client object from the list or detail.
+    // We'll compute currentDebt inside the payment modal using the client from the list or detail.
+
     const closePaymentModal = () => {
         if (paymentSaving) return;
         setPaymentModalOpen(false);
+        setPaymentClientId(null);
     };
 
     const handlePaymentChange = (e) => {
@@ -307,14 +352,14 @@ export const Clients = () => {
             if (editingClient) {
                 await api.put(`${CLIENTS_URL}/${editingClient._id}`, payload);
                 showToast('Mijoz yangilandi.', 'success');
-                if (selectedClientId === editingClient._id) {
+                if (clientId && editingClient._id === clientId) {
                     await mutateDetail();
                 }
             } else {
                 await api.post(CLIENTS_URL, payload);
                 showToast('Mijoz yaratildi.', 'success');
             }
-            await mutate();
+            await mutateList();
             setModalOpen(false);
         } catch (err) {
             showToast(err.response?.data?.message || err.message || 'Xatolik yuz berdi.', 'error');
@@ -332,14 +377,17 @@ export const Clients = () => {
 
         setPaymentSaving(true);
         try {
-            await api.post(`${CLIENTS_URL}/${selectedClientId}/payments`, {
+            await api.post(`${CLIENTS_URL}/${paymentClientId}/payments`, {
                 amount: Number(paymentForm.amount),
                 note: paymentForm.note || '',
             });
             showToast('To‘lov qabul qilindi.', 'success');
-            await mutateDetail();
-            await mutate();
+            if (clientId && paymentClientId === clientId) {
+                await mutateDetail();
+            }
+            await mutateList();
             setPaymentModalOpen(false);
+            setPaymentClientId(null);
         } catch (err) {
             showToast(err.response?.data?.message || err.message || 'To‘lov amalga oshmadi.', 'error');
         } finally {
@@ -359,14 +407,17 @@ export const Clients = () => {
             if (type === 'delete-client') {
                 await api.delete(`${CLIENTS_URL}/${payload._id}`);
                 showToast('Mijoz o‘chirildi.', 'success');
-                if (selectedClientId === payload._id) {
-                    setSelectedClientId(null);
+                if (clientId && payload._id === clientId) {
+                    navigate('/clients');
                 }
-                await mutate();
+                await mutateList();
+                if (clientId && payload._id === clientId) {
+                    mutateDetail();
+                }
             } else if (type === 'restore') {
                 showToast('Mijozni tiklash uchun tahrirlash orqali faollashtiring.', 'info');
             }
-            await mutate();
+            await mutateList();
         } catch (err) {
             showToast(err.response?.data?.message || err.message || 'Amalni bajarib bo‘lmadi.', 'error');
         } finally {
@@ -390,18 +441,23 @@ export const Clients = () => {
     };
 
     // ---------- Navigation ----------
-    const goToDetail = (clientId) => setSelectedClientId(clientId);
-    const goToList = () => setSelectedClientId(null);
+    const goToDetail = (clientId) => {
+        navigate(`/clients/${clientId}`);
+    };
+
+    const goToList = () => {
+        navigate('/clients');
+    };
 
     // ---------- Download report ----------
     const handleDownloadReport = async () => {
-        if (!selectedClientId) return;
+        if (!clientId) return;
 
         setReportDownloading(true);
 
         try {
             const response = await api.get(
-                `/reports/client/${selectedClientId}`,
+                `/reports/client/${clientId}`,
                 {
                     responseType: "blob",
                 }
@@ -425,7 +481,7 @@ export const Clients = () => {
             const url = window.URL.createObjectURL(blob);
             const link = document.createElement("a");
             link.href = url;
-            link.download = `client-report-${selectedClientId}.xlsx`;
+            link.download = `client-report-${clientId}.xlsx`;
 
             document.body.appendChild(link);
             link.click();
@@ -443,14 +499,13 @@ export const Clients = () => {
             setReportDownloading(false);
         }
     };
-    // ---------- Payment quick-amount helpers ----------
-    const currentDebt = client?.debt || 0;
-    const paymentAmountNum = Number(paymentForm.amount) || 0;
 
     // ============================================================
-    // RENDER: DETAIL VIEW
+    // RENDER FUNCTIONS
     // ============================================================
-    if (selectedClientId) {
+
+    const renderDetail = () => {
+
         if (detailLoading) {
             return (
                 <div className="min-h-screen bg-white flex items-center justify-center">
@@ -508,7 +563,6 @@ export const Clients = () => {
                         </button>
                     </div>
 
-                    {/* Client detail content (no print-specific wrappers) */}
                     <div className="bg-white rounded-2xl shadow-md border border-gray-200 overflow-hidden">
                         {/* Header */}
                         <div className="px-6 py-5 border-b border-gray-200 flex flex-wrap items-start justify-between gap-4">
@@ -535,12 +589,26 @@ export const Clients = () => {
                             </div>
                             <div className="flex gap-2 flex-wrap">
                                 {!isDeleted && (
-                                    <button
-                                        onClick={() => openPaymentModal(client)}
-                                        className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
-                                    >
-                                        <CreditCard size={16} /> To‘lov qo‘shish
-                                    </button>
+                                    <>
+                                        <button
+                                            onClick={() => openPaymentModalWithClient(client)}
+                                            className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
+                                        >
+                                            <CreditCard size={16} /> To‘lov qo‘shish
+                                        </button>
+                                        <button
+                                            onClick={() => openEditModal(client)}
+                                            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
+                                        >
+                                            <Pencil size={16} /> Tahrirlash
+                                        </button>
+                                        <button
+                                            onClick={() => requestDeleteClient(client)}
+                                            className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
+                                        >
+                                            <Trash2 size={16} /> O‘chirish
+                                        </button>
+                                    </>
                                 )}
                             </div>
                         </div>
@@ -558,7 +626,7 @@ export const Clients = () => {
                             />
                         </div>
 
-                        {/* Payment History - Excel style */}
+                        {/* Payment History */}
                         <div className="p-6">
                             <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-4">
                                 To‘lovlar tarixi ({client.paymentHistory?.length || 0})
@@ -603,7 +671,7 @@ export const Clients = () => {
                             )}
                         </div>
 
-                        {/* Orders Table - Excel style */}
+                        {/* Orders */}
                         {client.orders && client.orders.length > 0 && (
                             <div className="px-6 pb-6">
                                 <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-4">
@@ -621,7 +689,7 @@ export const Clients = () => {
                                         </thead>
                                         <tbody className="divide-y divide-gray-100">
                                             {client.orders.map((order, idx) => (
-                                                <tr key={order._id} className={`hover:bg-white transition ${idx % 2 === 0 ? 'bg-white' : 'bg-white/50'}`}>
+                                                <tr onClick={() => navigate(`/orders/${order._id}`)} key={order._id} className={`hover:bg-white cursor-pointer transition ${idx % 2 === 0 ? 'bg-white' : 'bg-white/50'}`}>
                                                     <td className="px-4 py-3 text-gray-600">{idx + 1}</td>
                                                     <td className="px-4 py-3 text-gray-600">
                                                         {new Date(order.createdAt).toLocaleDateString('uz-UZ')}
@@ -660,251 +728,11 @@ export const Clients = () => {
                         </div>
                     </div>
                 </div>
-
-                {/* Modals & overlays */}
-                {modalOpen && (
-                    <div
-                        className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/40 backdrop-blur-sm"
-                        onClick={closeModal}
-                    >
-                        <div
-                            className="bg-white w-full max-w-md rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto p-6 relative"
-                            onClick={(e) => e.stopPropagation()}
-                        >
-                            <button
-                                onClick={closeModal}
-                                className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 disabled:opacity-40"
-                                disabled={saving}
-                            >
-                                <X size={24} />
-                            </button>
-
-                            <h2 className="text-2xl font-bold text-gray-900 mb-1">
-                                {editingClient ? 'Mijozni tahrirlash' : 'Yangi mijoz qo‘shish'}
-                            </h2>
-                            <p className="text-sm text-gray-500 mb-6">
-                                {editingClient ? 'Maʼlumotlarni o‘zgartiring va saqlang.' : 'Barcha maydonlarni to‘ldiring.'}
-                            </p>
-
-                            <form onSubmit={handleSubmit} className="space-y-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Ism *</label>
-                                    <input
-                                        type="text"
-                                        name="name"
-                                        value={form.name}
-                                        onChange={handleFormChange}
-                                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none ${formErrors.name ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
-                                            }`}
-                                    />
-                                    {formErrors.name && <p className="text-xs text-red-500 mt-1">{formErrors.name}</p>}
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Telefon *</label>
-                                    <input
-                                        type="text"
-                                        name="phone"
-                                        value={form.phone}
-                                        onChange={handleFormChange}
-                                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none ${formErrors.phone ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
-                                            }`}
-                                        placeholder="+998901234567"
-                                    />
-                                    {formErrors.phone && <p className="text-xs text-red-500 mt-1">{formErrors.phone}</p>}
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Qarz ($)</label>
-                                    <input
-                                        type="number"
-                                        name="debt"
-                                        step="0.01"
-                                        min="-999999999"
-                                        value={form.debt}
-                                        onChange={handleFormChange}
-                                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none ${formErrors.debt ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
-                                            }`}
-                                        placeholder="0.00 (manfiy ham mumkin)"
-                                    />
-                                    {formErrors.debt && <p className="text-xs text-red-500 mt-1">{formErrors.debt}</p>}
-                                    {editingClient && (
-                                        <p className="text-xs text-gray-400 mt-1">Qarzni qo‘lda tuzatish (agar kerak bo‘lsa)</p>
-                                    )}
-                                </div>
-
-                                <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
-                                    <button
-                                        type="button"
-                                        onClick={closeModal}
-                                        disabled={saving}
-                                        className="px-5 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-white transition text-sm font-medium disabled:opacity-50"
-                                    >
-                                        Bekor qilish
-                                    </button>
-                                    <button
-                                        type="submit"
-                                        disabled={saving}
-                                        className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
-                                    >
-                                        {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-                                        {editingClient ? 'Yangilash' : 'Yaratish'}
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                )}
-
-                {/* Payment Modal */}
-                {paymentModalOpen && client && (
-                    <div
-                        className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-150"
-                        onClick={closePaymentModal}
-                    >
-                        <div
-                            className="bg-white w-full max-w-md rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto p-6 relative animate-in zoom-in-95 slide-in-from-bottom-2 duration-200"
-                            onClick={(e) => e.stopPropagation()}
-                        >
-                            <button
-                                onClick={closePaymentModal}
-                                className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 disabled:opacity-40"
-                                disabled={paymentSaving}
-                            >
-                                <X size={24} />
-                            </button>
-
-                            <div className="flex items-center gap-3 mb-5">
-                                <div className="w-11 h-11 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
-                                    <CreditCard size={20} />
-                                </div>
-                                <div className="min-w-0">
-                                    <h2 className="text-lg font-bold text-gray-900 truncate">To‘lov qo‘shish</h2>
-                                    <p className="text-sm text-gray-500 truncate">{client.name}</p>
-                                </div>
-                            </div>
-
-                            <div className="rounded-xl border border-gray-200 bg-white p-4 mb-5 grid grid-cols-2 gap-3">
-                                <div>
-                                    <p className="text-xs text-gray-500 mb-0.5">Joriy qarz</p>
-                                    <p className="text-lg font-bold text-red-600">{currentDebt.toLocaleString()} $</p>
-                                </div>
-                                <div>
-                                    <p className="text-xs text-gray-500 mb-0.5">To‘lovdan keyin</p>
-                                    <p className={`text-lg font-bold ${paymentAmountNum > 0 && currentDebt - paymentAmountNum <= 0
-                                        ? 'text-emerald-600'
-                                        : 'text-gray-900'
-                                        }`}>
-                                        {Math.max(currentDebt - paymentAmountNum, 0).toLocaleString()} $
-                                    </p>
-                                </div>
-                            </div>
-
-                            <form onSubmit={handlePaymentSubmit} className="space-y-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Summa ($) *</label>
-                                    <input
-                                        type="number"
-                                        name="amount"
-                                        step="0.01"
-                                        min="0.01"
-                                        autoFocus
-                                        value={paymentForm.amount}
-                                        onChange={handlePaymentChange}
-                                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-lg font-medium ${paymentErrors.amount ? 'border-red-400' : 'border-gray-300 focus:border-emerald-500'
-                                            }`}
-                                        placeholder="100000"
-                                    />
-                                    {paymentErrors.amount ? (
-                                        <p className="text-xs text-red-500 mt-1">{paymentErrors.amount}</p>
-                                    ) : paymentAmountNum > currentDebt && currentDebt > 0 ? (
-                                        <p className="text-xs text-amber-600 mt-1">
-                                            Kiritilgan summa joriy qarzdan {(paymentAmountNum - currentDebt).toLocaleString()} $ ko‘p.
-                                        </p>
-                                    ) : null}
-
-                                    {currentDebt > 0 && (
-                                        <div className="flex flex-wrap gap-2 mt-2">
-                                            <button
-                                                type="button"
-                                                onClick={() => setPaymentForm(prev => ({ ...prev, amount: String(Math.round(currentDebt * 0.25 * 100) / 100) }))}
-                                                className="px-2.5 py-1 text-xs font-medium rounded-full border border-gray-300 text-gray-600 hover:border-emerald-400 hover:text-emerald-700 transition"
-                                            >
-                                                25%
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => setPaymentForm(prev => ({ ...prev, amount: String(Math.round(currentDebt * 0.5 * 100) / 100) }))}
-                                                className="px-2.5 py-1 text-xs font-medium rounded-full border border-gray-300 text-gray-600 hover:border-emerald-400 hover:text-emerald-700 transition"
-                                            >
-                                                50%
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => setPaymentForm(prev => ({ ...prev, amount: String(currentDebt) }))}
-                                                className="px-2.5 py-1 text-xs font-medium rounded-full border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition"
-                                            >
-                                                To‘liq ({currentDebt.toLocaleString()} $)
-                                            </button>
-                                        </div>
-                                    )}
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Izoh</label>
-                                    <input
-                                        type="text"
-                                        name="note"
-                                        value={paymentForm.note}
-                                        onChange={handlePaymentChange}
-                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
-                                        placeholder="Naqd to‘lov"
-                                    />
-                                </div>
-
-                                <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
-                                    <button
-                                        type="button"
-                                        onClick={closePaymentModal}
-                                        disabled={paymentSaving}
-                                        className="px-5 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-white transition text-sm font-medium disabled:opacity-50"
-                                    >
-                                        Bekor qilish
-                                    </button>
-                                    <button
-                                        type="submit"
-                                        disabled={paymentSaving || !paymentForm.amount}
-                                        className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium shadow-sm transition disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
-                                    >
-                                        {paymentSaving && <Loader2 className="w-4 h-4 animate-spin" />}
-                                        To‘lov qo‘shish
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                )}
-
-                {/* Confirm Dialog */}
-                <ConfirmDialog
-                    open={!!confirmState}
-                    title={confirmState ? confirmCopy[confirmState.type].title : ''}
-                    message={confirmState ? confirmCopy[confirmState.type].message(confirmState.payload) : ''}
-                    confirmLabel={confirmState ? confirmCopy[confirmState.type].confirmLabel : ''}
-                    danger={confirmState ? confirmCopy[confirmState.type].danger : true}
-                    onConfirm={handleConfirm}
-                    onCancel={() => setConfirmState(null)}
-                />
-
-                <Toast toast={toast} onClose={() => setToast(null)} />
             </div>
         );
-    }
+    };
 
-    // ============================================================
-    // RENDER: LIST VIEW
-    // ============================================================
-    return (
+    const renderList = () => (
         <div className="min-h-screen bg-white font-sans">
             <div className="mx-auto px-4 sm:px-6 py-6">
                 {/* Header */}
@@ -947,15 +775,15 @@ export const Clients = () => {
 
                 {/* Content */}
                 <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-                    {error ? (
+                    {listError ? (
                         <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
                             <AlertCircle className="w-10 h-10 text-red-400 mb-3" />
                             <p className="text-gray-700 font-medium mb-1">Mijozlarni yuklab bo‘lmadi</p>
                             <p className="text-sm text-gray-500 mb-4">
-                                {error.response?.data?.message || 'Server bilan bog‘lanishda xatolik yuz berdi.'}
+                                {listError.response?.data?.message || 'Server bilan bog‘lanishda xatolik yuz berdi.'}
                             </p>
                             <button
-                                onClick={() => mutate()}
+                                onClick={() => mutateList()}
                                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg"
                             >
                                 Qayta urinish
@@ -973,7 +801,7 @@ export const Clients = () => {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {isLoading && !data ? (
+                                    {listLoading && !listData ? (
                                         <SkeletonRows rows={limit} />
                                     ) : clients.length === 0 ? (
                                         <tr>
@@ -1029,21 +857,21 @@ export const Clients = () => {
                                                         ) : (
                                                             <>
                                                                 <button
-                                                                    onClick={() => openPaymentModal(client)}
+                                                                    onClick={(e) => { e.stopPropagation(); openPaymentModalWithClient(client); }}
                                                                     className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition"
                                                                     title="To‘lov qo‘shish"
                                                                 >
                                                                     <CreditCard size={18} />
                                                                 </button>
                                                                 <button
-                                                                    onClick={() => openEditModal(client)}
+                                                                    onClick={(e) => { e.stopPropagation(); openEditModal(client); }}
                                                                     className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
                                                                     title="Tahrirlash"
                                                                 >
                                                                     <Pencil size={18} />
                                                                 </button>
                                                                 <button
-                                                                    onClick={() => requestDeleteClient(client)}
+                                                                    onClick={(e) => { e.stopPropagation(); requestDeleteClient(client); }}
                                                                     className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
                                                                     title="O‘chirish"
                                                                 >
@@ -1062,10 +890,10 @@ export const Clients = () => {
                     )}
 
                     {/* Pagination */}
-                    {!error && clients.length > 0 && (
+                    {!listError && clients.length > 0 && (
                         <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 text-sm">
                             <span className="text-gray-500">
-                                {page}-sahifa / {totalPages} {isValidating && <Loader2 className="inline w-4 h-4 animate-spin ml-1" />}
+                                {page}-sahifa / {totalPages} {listValidating && <Loader2 className="inline w-4 h-4 animate-spin ml-1" />}
                             </span>
                             <div className="flex gap-1">
                                 <button
@@ -1086,206 +914,260 @@ export const Clients = () => {
                         </div>
                     )}
                 </div>
-
-                {/* Modals */}
-                {modalOpen && (
-                    <div
-                        className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/40 backdrop-blur-sm"
-                        onClick={closeModal}
-                    >
-                        <div
-                            className="bg-white w-full max-w-md rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto p-6 relative"
-                            onClick={(e) => e.stopPropagation()}
-                        >
-                            <button
-                                onClick={closeModal}
-                                className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 disabled:opacity-40"
-                                disabled={saving}
-                            >
-                                <X size={24} />
-                            </button>
-
-                            <h2 className="text-2xl font-bold text-gray-900 mb-1">
-                                {editingClient ? 'Mijozni tahrirlash' : 'Yangi mijoz qo‘shish'}
-                            </h2>
-                            <p className="text-sm text-gray-500 mb-6">
-                                {editingClient ? 'Maʼlumotlarni o‘zgartiring va saqlang.' : 'Barcha maydonlarni to‘ldiring.'}
-                            </p>
-
-                            <form onSubmit={handleSubmit} className="space-y-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Ism *</label>
-                                    <input
-                                        type="text"
-                                        name="name"
-                                        value={form.name}
-                                        onChange={handleFormChange}
-                                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none ${formErrors.name ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
-                                            }`}
-                                    />
-                                    {formErrors.name && <p className="text-xs text-red-500 mt-1">{formErrors.name}</p>}
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Telefon *</label>
-                                    <input
-                                        type="text"
-                                        name="phone"
-                                        value={form.phone}
-                                        onChange={handleFormChange}
-                                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none ${formErrors.phone ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
-                                            }`}
-                                        placeholder="+998901234567"
-                                    />
-                                    {formErrors.phone && <p className="text-xs text-red-500 mt-1">{formErrors.phone}</p>}
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Qarz ($)</label>
-                                    <input
-                                        type="number"
-                                        name="debt"
-                                        step="0.01"
-                                        min="-999999999"   // <-- FIX: allow negative values
-                                        value={form.debt}
-                                        onChange={handleFormChange}
-                                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none ${formErrors.debt ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
-                                            }`}
-                                        placeholder="0.00 (manfiy ham mumkin)"
-                                    />
-                                    {formErrors.debt && <p className="text-xs text-red-500 mt-1">{formErrors.debt}</p>}
-                                    {editingClient && (
-                                        <p className="text-xs text-gray-400 mt-1">Qarzni qo‘lda tuzatish (agar kerak bo‘lsa)</p>
-                                    )}
-                                </div>
-
-                                <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
-                                    <button
-                                        type="button"
-                                        onClick={closeModal}
-                                        disabled={saving}
-                                        className="px-5 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-white transition text-sm font-medium disabled:opacity-50"
-                                    >
-                                        Bekor qilish
-                                    </button>
-                                    <button
-                                        type="submit"
-                                        disabled={saving}
-                                        className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
-                                    >
-                                        {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-                                        {editingClient ? 'Yangilash' : 'Yaratish'}
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                )}
-
-                {/* Payment Modal (from list) */}
-                {paymentModalOpen && selectedClientId && (
-                    <div
-                        className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-150"
-                        onClick={closePaymentModal}
-                    >
-                        <div
-                            className="bg-white w-full max-w-md rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto p-6 relative animate-in zoom-in-95 slide-in-from-bottom-2 duration-200"
-                            onClick={(e) => e.stopPropagation()}
-                        >
-                            <button
-                                onClick={closePaymentModal}
-                                className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 disabled:opacity-40"
-                                disabled={paymentSaving}
-                            >
-                                <X size={24} />
-                            </button>
-
-                            <div className="flex items-center gap-3 mb-5">
-                                <div className="w-11 h-11 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
-                                    <CreditCard size={20} />
-                                </div>
-                                <div className="min-w-0">
-                                    <h2 className="text-lg font-bold text-gray-900 truncate">To‘lov qo‘shish</h2>
-                                    <p className="text-sm text-gray-500 truncate">Mijoz ID: {selectedClientId.slice(-6)}</p>
-                                </div>
-                            </div>
-
-                            <div className="rounded-xl border border-gray-200 bg-white p-4 mb-5 grid grid-cols-2 gap-3">
-                                <div>
-                                    <p className="text-xs text-gray-500 mb-0.5">Joriy qarz</p>
-                                    <p className="text-lg font-bold text-red-600">—</p>
-                                </div>
-                                <div>
-                                    <p className="text-xs text-gray-500 mb-0.5">To‘lovdan keyin</p>
-                                    <p className="text-lg font-bold text-gray-900">—</p>
-                                </div>
-                            </div>
-
-                            <form onSubmit={handlePaymentSubmit} className="space-y-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Summa ($) *</label>
-                                    <input
-                                        type="number"
-                                        name="amount"
-                                        step="0.01"
-                                        min="0.01"
-                                        autoFocus
-                                        value={paymentForm.amount}
-                                        onChange={handlePaymentChange}
-                                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-lg font-medium ${paymentErrors.amount ? 'border-red-400' : 'border-gray-300 focus:border-emerald-500'
-                                            }`}
-                                        placeholder="100000"
-                                    />
-                                    {paymentErrors.amount && <p className="text-xs text-red-500 mt-1">{paymentErrors.amount}</p>}
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Izoh</label>
-                                    <input
-                                        type="text"
-                                        name="note"
-                                        value={paymentForm.note}
-                                        onChange={handlePaymentChange}
-                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
-                                        placeholder="Naqd to‘lov"
-                                    />
-                                </div>
-
-                                <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
-                                    <button
-                                        type="button"
-                                        onClick={closePaymentModal}
-                                        disabled={paymentSaving}
-                                        className="px-5 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-white transition text-sm font-medium disabled:opacity-50"
-                                    >
-                                        Bekor qilish
-                                    </button>
-                                    <button
-                                        type="submit"
-                                        disabled={paymentSaving || !paymentForm.amount}
-                                        className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium shadow-sm transition disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
-                                    >
-                                        {paymentSaving && <Loader2 className="w-4 h-4 animate-spin" />}
-                                        To‘lov qo‘shish
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                )}
-
-                <ConfirmDialog
-                    open={!!confirmState}
-                    title={confirmState ? confirmCopy[confirmState.type].title : ''}
-                    message={confirmState ? confirmCopy[confirmState.type].message(confirmState.payload) : ''}
-                    confirmLabel={confirmState ? confirmCopy[confirmState.type].confirmLabel : ''}
-                    danger={confirmState ? confirmCopy[confirmState.type].danger : true}
-                    onConfirm={handleConfirm}
-                    onCancel={() => setConfirmState(null)}
-                />
-
-                <Toast toast={toast} onClose={() => setToast(null)} />
             </div>
         </div>
+    );
+
+    // ============================================================
+    // MAIN RENDER: decide which view, but modals always at top
+    // ============================================================
+
+    // Helper to get the client for payment modal (from detail or list)
+    const paymentClient = paymentClientId ? (
+        clientId === paymentClientId ? client : clients.find(c => c._id === paymentClientId)
+    ) : null;
+    const currentDebt = paymentClient?.debt || 0;
+    const paymentAmountNum = Number(paymentForm.amount) || 0;
+
+    return (
+        <>
+            {/* Content */}
+            {clientId ? renderDetail() : renderList()}
+
+            {/* ====== Create / Edit Modal ====== */}
+            {modalOpen && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/40 backdrop-blur-sm"
+                    onClick={closeModal}
+                >
+                    <div
+                        className="bg-white w-full max-w-md rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto p-6 relative"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <button
+                            onClick={closeModal}
+                            className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 disabled:opacity-40"
+                            disabled={saving}
+                        >
+                            <X size={24} />
+                        </button>
+
+                        <h2 className="text-2xl font-bold text-gray-900 mb-1">
+                            {editingClient ? 'Mijozni tahrirlash' : 'Yangi mijoz qo‘shish'}
+                        </h2>
+                        <p className="text-sm text-gray-500 mb-6">
+                            {editingClient ? 'Maʼlumotlarni o‘zgartiring va saqlang.' : 'Barcha maydonlarni to‘ldiring.'}
+                        </p>
+
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Ism *</label>
+                                <input
+                                    type="text"
+                                    name="name"
+                                    value={form.name}
+                                    onChange={handleFormChange}
+                                    className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none ${formErrors.name ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
+                                        }`}
+                                />
+                                {formErrors.name && <p className="text-xs text-red-500 mt-1">{formErrors.name}</p>}
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Telefon *</label>
+                                <input
+                                    type="text"
+                                    name="phone"
+                                    value={form.phone}
+                                    onChange={handleFormChange}
+                                    className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none ${formErrors.phone ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
+                                        }`}
+                                    placeholder="+998901234567"
+                                />
+                                {formErrors.phone && <p className="text-xs text-red-500 mt-1">{formErrors.phone}</p>}
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Qarz ($)</label>
+                                <input
+                                    type="number"
+                                    name="debt"
+                                    step="0.01"
+                                    min="-999999999"
+                                    value={form.debt}
+                                    onChange={handleFormChange}
+                                    className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none ${formErrors.debt ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
+                                        }`}
+                                    placeholder="0.00 (manfiy ham mumkin)"
+                                />
+                                {formErrors.debt && <p className="text-xs text-red-500 mt-1">{formErrors.debt}</p>}
+                                {editingClient && (
+                                    <p className="text-xs text-gray-400 mt-1">Qarzni qo‘lda tuzatish (agar kerak bo‘lsa)</p>
+                                )}
+                            </div>
+
+                            <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+                                <button
+                                    type="button"
+                                    onClick={closeModal}
+                                    disabled={saving}
+                                    className="px-5 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-white transition text-sm font-medium disabled:opacity-50"
+                                >
+                                    Bekor qilish
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={saving}
+                                    className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                                >
+                                    {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+                                    {editingClient ? 'Yangilash' : 'Yaratish'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {paymentModalOpen && paymentClient && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-150"
+                    onClick={closePaymentModal}
+                >
+                    <div
+                        className="bg-white w-full max-w-md rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto p-6 relative animate-in zoom-in-95 slide-in-from-bottom-2 duration-200"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <button
+                            onClick={closePaymentModal}
+                            className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 disabled:opacity-40"
+                            disabled={paymentSaving}
+                        >
+                            <X size={24} />
+                        </button>
+
+                        <div className="flex items-center gap-3 mb-5">
+                            <div className="w-11 h-11 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                                <CreditCard size={20} />
+                            </div>
+                            <div className="min-w-0">
+                                <h2 className="text-lg font-bold text-gray-900 truncate">To‘lov qo‘shish</h2>
+                                <p className="text-sm text-gray-500 truncate">{paymentClient.name}</p>
+                            </div>
+                        </div>
+
+                        <div className="rounded-xl border border-gray-200 bg-white p-4 mb-5 grid grid-cols-2 gap-3">
+                            <div>
+                                <p className="text-xs text-gray-500 mb-0.5">Joriy qarz</p>
+                                <p className="text-lg font-bold text-red-600">{currentDebt.toLocaleString()} $</p>
+                            </div>
+                            <div>
+                                <p className="text-xs text-gray-500 mb-0.5">To‘lovdan keyin</p>
+                                <p className={`text-lg font-bold ${paymentAmountNum > 0 && currentDebt - paymentAmountNum <= 0
+                                    ? 'text-emerald-600'
+                                    : 'text-gray-900'
+                                    }`}>
+                                    {Math.max(currentDebt - paymentAmountNum, 0).toLocaleString()} $
+                                </p>
+                            </div>
+                        </div>
+
+                        <form onSubmit={handlePaymentSubmit} className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Summa ($) *</label>
+                                <input
+                                    type="number"
+                                    name="amount"
+                                    step="0.01"
+                                    min="0.01"
+                                    autoFocus
+                                    value={paymentForm.amount}
+                                    onChange={handlePaymentChange}
+                                    className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-lg font-medium ${paymentErrors.amount ? 'border-red-400' : 'border-gray-300 focus:border-emerald-500'
+                                        }`}
+                                    placeholder="100000"
+                                />
+                                {paymentErrors.amount ? (
+                                    <p className="text-xs text-red-500 mt-1">{paymentErrors.amount}</p>
+                                ) : paymentAmountNum > currentDebt && currentDebt > 0 ? (
+                                    <p className="text-xs text-amber-600 mt-1">
+                                        Kiritilgan summa joriy qarzdan {(paymentAmountNum - currentDebt).toLocaleString()} $ ko‘p.
+                                    </p>
+                                ) : null}
+
+                                {currentDebt > 0 && (
+                                    <div className="flex flex-wrap gap-2 mt-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setPaymentForm(prev => ({ ...prev, amount: String(Math.round(currentDebt * 0.25 * 100) / 100) }))}
+                                            className="px-2.5 py-1 text-xs font-medium rounded-full border border-gray-300 text-gray-600 hover:border-emerald-400 hover:text-emerald-700 transition"
+                                        >
+                                            25%
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setPaymentForm(prev => ({ ...prev, amount: String(Math.round(currentDebt * 0.5 * 100) / 100) }))}
+                                            className="px-2.5 py-1 text-xs font-medium rounded-full border border-gray-300 text-gray-600 hover:border-emerald-400 hover:text-emerald-700 transition"
+                                        >
+                                            50%
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setPaymentForm(prev => ({ ...prev, amount: String(currentDebt) }))}
+                                            className="px-2.5 py-1 text-xs font-medium rounded-full border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition"
+                                        >
+                                            To‘liq ({currentDebt.toLocaleString()} $)
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Izoh</label>
+                                <input
+                                    type="text"
+                                    name="note"
+                                    value={paymentForm.note}
+                                    onChange={handlePaymentChange}
+                                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                                    placeholder="Naqd to‘lov"
+                                />
+                            </div>
+
+                            <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+                                <button
+                                    type="button"
+                                    onClick={closePaymentModal}
+                                    disabled={paymentSaving}
+                                    className="px-5 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-white transition text-sm font-medium disabled:opacity-50"
+                                >
+                                    Bekor qilish
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={paymentSaving || !paymentForm.amount}
+                                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium shadow-sm transition disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                                >
+                                    {paymentSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                                    To‘lov qo‘shish
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            <ConfirmDialog
+                open={!!confirmState}
+                title={confirmState ? confirmCopy[confirmState.type].title : ''}
+                message={confirmState ? confirmCopy[confirmState.type].message(confirmState.payload) : ''}
+                confirmLabel={confirmState ? confirmCopy[confirmState.type].confirmLabel : ''}
+                danger={confirmState ? confirmCopy[confirmState.type].danger : true}
+                onConfirm={handleConfirm}
+                onCancel={() => setConfirmState(null)}
+            />
+
+            <Toast toast={toast} onClose={() => setToast(null)} />
+        </>
     );
 };

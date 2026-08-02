@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import useSWR from 'swr';
 import api from '../middlewares/fetcher';
 import {
@@ -19,7 +20,7 @@ import {
   DollarSign,
   ArrowLeft,
   Eye,
-  Layers, // Icon for boxes
+  Layers,
 } from 'lucide-react';
 
 // ---------- Constants ----------
@@ -46,54 +47,25 @@ const SORT_OPTIONS = [
 const emptySize = () => ({ size: '', price: '', boxes: '', box_kg: '' });
 
 // ---------- Custom Hook: Arrow Key Navigation ----------
-// This hook allows moving focus between inputs using Left/Right arrows
 const useArrowKeyNavigation = (modalOpen) => {
   useEffect(() => {
     if (!modalOpen) return;
-
     const handleKeyDown = (e) => {
-      // Only trigger on Left/Right arrows
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-
-      // Ignore if modifier keys are pressed (e.g., Alt+Left for browser back)
       if (e.altKey || e.ctrlKey || e.metaKey) return;
-
       const activeElement = document.activeElement;
-
-      // Check if the active element is an input within our modal
-      // We assume inputs in the modal have a specific data attribute or class, 
-      // or we just check if they are inside the modal container.
-      // Here we check if it's an input/textarea/select
-      if (!activeElement || !['INPUT', 'TEXTAREA', 'SELECT'].includes(activeElement.tagName)) {
-        return;
-      }
-
-      // Find all focusable elements in the form/modal
-      // We look for inputs specifically to avoid focusing buttons accidentally during data entry
+      if (!activeElement || !['INPUT', 'TEXTAREA', 'SELECT'].includes(activeElement.tagName)) return;
       const form = activeElement.closest('form');
       if (!form) return;
-
       const focusableInputs = Array.from(form.querySelectorAll('input, select, textarea'));
       const currentIndex = focusableInputs.indexOf(activeElement);
-
       if (currentIndex === -1) return;
-
-      let nextIndex;
-      if (e.key === 'ArrowRight') {
-        nextIndex = currentIndex + 1;
-      } else {
-        nextIndex = currentIndex - 1;
-      }
-
-      // Wrap around or stop at edges? Let's stop at edges for better UX in forms
+      let nextIndex = e.key === 'ArrowRight' ? currentIndex + 1 : currentIndex - 1;
       if (nextIndex >= 0 && nextIndex < focusableInputs.length) {
-        e.preventDefault(); // Prevent cursor movement inside text if desired, or just move focus
+        e.preventDefault();
         focusableInputs[nextIndex].focus();
-        // Optional: Select all text in the new input for quick replacement
-        // focusableInputs[nextIndex].select(); 
       }
     };
-
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [modalOpen]);
@@ -180,6 +152,10 @@ const StatCard = ({ icon: Icon, label, value, className = '' }) => (
 // MAIN COMPONENT
 // ============================================================
 export const Product = () => {
+  const navigate = useNavigate();
+  const params = useParams();
+  const productId = params.id; // route pattern /products/:id
+
   // ---------- List state ----------
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
@@ -188,9 +164,6 @@ export const Product = () => {
   const [page, setPage] = useState(1);
   const limit = 50;
 
-  // ---------- Detail state ----------
-  const [selectedProduct, setSelectedProduct] = useState(null); // product object, not just id
-
   // ---------- Modal state ----------
   const [modalOpen, setModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState(null);
@@ -198,7 +171,6 @@ export const Product = () => {
   const [formErrors, setFormErrors] = useState({});
   const [form, setForm] = useState({ name: '', category: '', sizes: [emptySize()] });
 
-  // Initialize arrow key navigation when modal opens
   useArrowKeyNavigation(modalOpen);
 
   // ---------- Confirm & Toast ----------
@@ -224,10 +196,10 @@ export const Product = () => {
 
   // ---------- SWR for list ----------
   const {
-    data,
-    error,
-    isLoading,
-    isValidating,
+    data: listData,
+    error: listError,
+    isLoading: listLoading,
+    isValidating: listValidating,
     mutate: mutateList,
   } = useSWR(
     `${PRODUCTS_URL}?${buildQuery()}`,
@@ -235,9 +207,23 @@ export const Product = () => {
     { keepPreviousData: true, revalidateOnFocus: false }
   );
 
-  const products = data?.data?.products || [];
-  const meta = data?.meta || { total: 0, page: 1, totalPages: 1 };
+  const products = listData?.data?.products || [];
+  const meta = listData?.meta || { total: 0, page: 1, totalPages: 1 };
   const totalPages = Math.max(meta.totalPages || 1, 1);
+
+  // ---------- SWR for detail (if productId exists) ----------
+  const {
+    data: productDetail,
+    error: productDetailError,
+    isLoading: productDetailLoading,
+    mutate: mutateProductDetail,
+  } = useSWR(
+    productId ? `${PRODUCTS_URL}/${productId}` : null,
+    (url) => api.get(url).then((res) => res.data),
+    { revalidateOnFocus: false }
+  );
+
+  const product = productDetail?.data?.product;
 
   // ---------- List handlers ----------
   const handleCategoryChange = (e) => {
@@ -316,12 +302,7 @@ export const Product = () => {
   const handleSizeChange = (index, field, value) => {
     const newSizes = [...form.sizes];
     newSizes[index][field] = value;
-
-    setForm({
-      ...form,
-      sizes: newSizes,
-    });
-
+    setForm({ ...form, sizes: newSizes });
     setFormErrors((prev) => ({
       ...prev,
       [`size-${index}-${field}`]: undefined,
@@ -329,36 +310,21 @@ export const Product = () => {
   };
 
   const addSizeRow = () => {
-    setForm({
-      ...form,
-      sizes: [...form.sizes, emptySize()],
-    });
+    setForm({ ...form, sizes: [...form.sizes, emptySize()] });
   };
 
   const removeSizeRow = (index) => {
     if (form.sizes.length <= 1) return;
-
-    setForm({
-      ...form,
-      sizes: form.sizes.filter((_, i) => i !== index),
-    });
+    setForm({ ...form, sizes: form.sizes.filter((_, i) => i !== index) });
   };
 
   const validateForm = () => {
     const errors = {};
-
-    if (!form.name.trim()) {
-      errors.name = 'Mahsulot nomi majburiy.';
-    }
-
-    if (!form.category.trim()) {
-      errors.category = 'Kategoriya tanlanishi shart.';
-    }
-
+    if (!form.name.trim()) errors.name = 'Mahsulot nomi majburiy.';
+    if (!form.category.trim()) errors.category = 'Kategoriya tanlanishi shart.';
     form.sizes.forEach((s, i) => {
       ['size', 'price', 'boxes', 'box_kg'].forEach((field) => {
         const value = Number(s[field]);
-
         if (s[field] === '' || s[field] === null || s[field] === undefined) {
           errors[`size-${i}-${field}`] = 'Majburiy';
         } else if (Number.isNaN(value)) {
@@ -368,9 +334,7 @@ export const Product = () => {
         }
       });
     });
-
     setFormErrors(errors);
-
     return Object.keys(errors).length === 0;
   };
 
@@ -396,10 +360,8 @@ export const Product = () => {
       if (editingProduct) {
         await api.put(`${PRODUCTS_URL}/${editingProduct._id}`, payload);
         showToast('Mahsulot yangilandi.', 'success');
-        // Update selected product if it is the one being edited
-        if (selectedProduct && selectedProduct._id === editingProduct._id) {
-          const updated = { ...selectedProduct, ...payload };
-          setSelectedProduct(updated);
+        if (productId && editingProduct._id === productId) {
+          await mutateProductDetail();
         }
       } else {
         await api.post(PRODUCTS_URL, payload);
@@ -426,17 +388,21 @@ export const Product = () => {
       if (type === 'delete-product') {
         await api.delete(`${PRODUCTS_URL}/${payload._id}`);
         showToast('Mahsulot o‘chirildi.', 'success');
-        if (selectedProduct && selectedProduct._id === payload._id) {
-          setSelectedProduct(null); // close detail if deleted
+        if (productId && payload._id === productId) {
+          navigate('/products');
+        }
+        await mutateList();
+        if (productId && payload._id === productId) {
+          mutateProductDetail();
         }
       } else if (type === 'restore') {
         await api.patch(`${PRODUCTS_URL}/${payload._id}/restore`);
         showToast('Mahsulot tiklandi.', 'success');
-        if (selectedProduct && selectedProduct._id === payload._id) {
-          setSelectedProduct({ ...selectedProduct, isDeleted: false });
+        await mutateList();
+        if (productId && payload._id === productId) {
+          mutateProductDetail();
         }
       }
-      await mutateList();
     } catch (err) {
       showToast(err.response?.data?.message || err.message || 'Amalni bajarib bo‘lmadi.', 'error');
     } finally {
@@ -461,18 +427,54 @@ export const Product = () => {
 
   // ---------- Navigate to detail ----------
   const goToDetail = (product) => {
-    setSelectedProduct(product);
+    navigate(`/products/${product._id}`);
   };
 
   const goToList = () => {
-    setSelectedProduct(null);
+    navigate('/products');
   };
 
   // ============================================================
-  // RENDER: DETAIL VIEW (uses selectedProduct from list)
+  // RENDER FUNCTIONS
   // ============================================================
-  if (selectedProduct) {
-    const product = selectedProduct;
+
+  const renderDetail = () => {
+    // Loading
+    if (productDetailLoading) {
+      return (
+        <div className="min-h-screen py-6 px-4 sm:px-6 flex items-center justify-center">
+          <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+        </div>
+      );
+    }
+    // Error
+    if (productDetailError) {
+      return (
+        <div className="min-h-screen py-6 px-4 sm:px-6 flex flex-col items-center justify-center">
+          <AlertCircle className="w-12 h-12 text-red-400 mb-4" />
+          <p className="text-gray-700 font-medium">Mahsulotni yuklab bo‘lmadi</p>
+          <p className="text-sm text-gray-500 mb-4">
+            {productDetailError.response?.data?.message || 'Server xatosi'}
+          </p>
+          <button onClick={() => navigate('/products')} className="px-4 py-2 bg-blue-600 text-white rounded-lg">
+            Ro‘yxatga qaytish
+          </button>
+        </div>
+      );
+    }
+    // No product
+    if (!product) {
+      return (
+        <div className="min-h-screen py-6 px-4 sm:px-6 flex flex-col items-center justify-center">
+          <Package className="w-12 h-12 text-gray-300 mb-4" />
+          <p className="text-gray-600">Mahsulot topilmadi</p>
+          <button onClick={() => navigate('/products')} className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg">
+            Ro‘yxatga qaytish
+          </button>
+        </div>
+      );
+    }
+
     const totalKg = product.sizes.reduce((acc, s) => acc + (s.total || 0), 0);
     const totalPrice = product.sizes.reduce((acc, s) => acc + (s.total || 0) * s.price, 0);
     const totalBoxes = product.sizes.reduce((acc, s) => acc + (Number(s.boxes) || 0), 0);
@@ -523,25 +525,29 @@ export const Product = () => {
                 ) : (
                   <>
                     <button
-                      onClick={() => { setSelectedProduct(null); openEditModal(product); }}
+                      onClick={() => openEditModal(product)}
                       className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
                     >
                       <Pencil size={16} /> Tahrirlash
+                    </button>
+                    <button
+                      onClick={() => requestDeleteProduct(product)}
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium shadow-sm transition"
+                    >
+                      <Trash2 size={16} /> O‘chirish
                     </button>
                   </>
                 )}
               </div>
             </div>
 
-            {/* Stats */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 p-6 border-b border-gray-200">
               <StatCard icon={Box} label="Jami vazn (kg)" value={`${totalKg.toLocaleString()} kg`} />
-              <StatCard icon={Layers} label="Jami qutilar" value={`${totalBoxes.toLocaleString()} ta`} />
+              <StatCard icon={Layers} label="Jami SHT" value={`${totalBoxes.toLocaleString()} ta`} />
               <StatCard icon={DollarSign} label="Umumiy narx" value={`${totalPrice.toLocaleString()} $`} />
               <StatCard icon={Ruler} label="Razmerlar soni" value={product.sizes.length} />
             </div>
 
-            {/* Sizes table with "Umumiy narx" (total price per size) */}
             <div className="p-6">
               <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-4">
                 Razmerlar ({product.sizes.length})
@@ -551,8 +557,8 @@ export const Product = () => {
                   <thead className="border-b border-gray-200">
                     <tr>
                       <th className="px-4 py-3 text-left font-medium text-gray-600">Razmer</th>
-                      <th className="px-4 py-3 text-left font-medium text-gray-600">Qutilar soni</th>
-                      <th className="px-4 py-3 text-left font-medium text-gray-600">Quti kg</th>
+                      <th className="px-4 py-3 text-left font-medium text-gray-600">SHT</th>
+                      <th className="px-4 py-3 text-left font-medium text-gray-600">SHT kg</th>
                       <th className="px-4 py-3 text-right font-medium text-gray-600">Jami (kg)</th>
                       <th className="px-4 py-3 text-left font-medium text-gray-600">Narx (kg / $)</th>
                       <th className="px-4 py-3 text-right font-medium text-gray-600">Umumiy narx ($)</th>
@@ -576,9 +582,13 @@ export const Product = () => {
                         </tr>
                       );
                     })}
+                    {/* Footer totals row */}
                     <tr className="font-semibold border-t-2 border-gray-200 bg-gray-50">
-                      <td colSpan="4" className="px-4 py-3 text-right text-gray-700">Jami:</td>
+                      <td className="px-4 py-3 text-gray-700">Jami:</td>
+                      <td className="px-4 py-3 text-gray-900">{totalBoxes.toLocaleString()}</td>
+                      <td className="px-4 py-3"></td>
                       <td className="px-4 py-3 text-right text-gray-900">{totalKg.toLocaleString()} kg</td>
+                      <td className="px-4 py-3"></td>
                       <td className="px-4 py-3 text-right text-emerald-700">{totalPrice.toLocaleString()} $</td>
                     </tr>
                   </tbody>
@@ -595,12 +605,9 @@ export const Product = () => {
         </div>
       </div>
     );
-  }
+  };
 
-  // ============================================================
-  // RENDER: LIST VIEW
-  // ============================================================
-  return (
+  const renderList = () => (
     <div className="min-h-screen font-sans">
       <div className="mx-auto px-4 sm:px-6 py-6">
         {/* Header */}
@@ -662,12 +669,12 @@ export const Product = () => {
 
         {/* Content */}
         <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-          {error ? (
+          {listError ? (
             <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
               <AlertCircle className="w-10 h-10 text-red-400 mb-3" />
               <p className="text-gray-700 font-medium mb-1">Mahsulotlarni yuklab bo‘lmadi</p>
               <p className="text-sm text-gray-500 mb-4">
-                {error.response?.data?.message || 'Server bilan bog‘lanishda xatolik yuz berdi.'}
+                {listError.response?.data?.message || 'Server bilan bog‘lanishda xatolik yuz berdi.'}
               </p>
               <button
                 onClick={() => mutateList()}
@@ -688,7 +695,7 @@ export const Product = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {isLoading && !data ? (
+                  {listLoading && !listData ? (
                     <SkeletonRows rows={limit} />
                   ) : products.length === 0 ? (
                     <tr>
@@ -738,7 +745,7 @@ export const Product = () => {
                               <span
                                 key={s._id}
                                 className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-full text-xs bg-gray-100 text-gray-700"
-                                title={`Narx: $${s.price} · Quti: ${s.boxes} × ${s.box_kg}kg`}
+                                title={`Narx: $${s.price} · SHT: ${s.boxes} × ${s.box_kg}kg`}
                               >
                                 {s.size}
                               </span>
@@ -758,21 +765,21 @@ export const Product = () => {
                             ) : (
                               <>
                                 <button
-                                  onClick={() => openEditModal(product)}
+                                  onClick={(e) => { e.stopPropagation(); openEditModal(product); }}
                                   className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
                                   title="Tahrirlash"
                                 >
                                   <Pencil size={18} />
                                 </button>
                                 <button
-                                  onClick={() => goToDetail(product)}
+                                  onClick={(e) => { e.stopPropagation(); goToDetail(product); }}
                                   className="p-2 text-gray-500 hover:text-yellow-600 hover:bg-yellow-50 rounded-lg transition"
                                   title="Ko'rish"
                                 >
                                   <Eye size={18} />
                                 </button>
                                 <button
-                                  onClick={() => requestDeleteProduct(product)}
+                                  onClick={(e) => { e.stopPropagation(); requestDeleteProduct(product); }}
                                   className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
                                   title="O‘chirish"
                                 >
@@ -791,10 +798,10 @@ export const Product = () => {
           )}
 
           {/* Pagination */}
-          {!error && products.length > 0 && (
+          {!listError && products.length > 0 && (
             <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 text-sm">
               <span className="text-gray-500">
-                {page}-sahifa / {totalPages} {isValidating && <Loader2 className="inline w-4 h-4 animate-spin ml-1" />}
+                {page}-sahifa / {totalPages} {listValidating && <Loader2 className="inline w-4 h-4 animate-spin ml-1" />}
               </span>
               <div className="flex gap-1">
                 <button
@@ -815,183 +822,193 @@ export const Product = () => {
             </div>
           )}
         </div>
-
-        {/* ====== Create / Edit Modal ====== */}
-        {modalOpen && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/40 backdrop-blur-sm"
-            onClick={closeModal}
-          >
-            <div
-              className="bg-white w-full max-w-2xl rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto p-6 relative"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <button
-                onClick={closeModal}
-                className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 disabled:opacity-40"
-                disabled={saving}
-              >
-                <X size={24} />
-              </button>
-
-              <h2 className="text-2xl font-bold text-gray-900 mb-1">
-                {editingProduct ? 'Mahsulotni tahrirlash' : 'Yangi mahsulot qo‘shish'}
-              </h2>
-              <p className="text-sm text-gray-500 mb-6">
-                {editingProduct ? 'Ma’lumotlarni o‘zgartiring va saqlang.' : 'Barcha maydonlarni to‘ldiring.'}
-              </p>
-
-              <form onSubmit={handleSubmit} className="space-y-5">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Mahsulot nomi *
-                  </label>
-                  <input
-                    type="text"
-                    name="name"
-                    value={form.name}
-                    onChange={handleFormChange}
-                    className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none ${formErrors.name ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
-                      }`}
-                  />
-                  {formErrors.name && <p className="text-xs text-red-500 mt-1">{formErrors.name}</p>}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Kategoriya *
-                  </label>
-                  <select
-                    name="category"
-                    value={form.category}
-                    onChange={handleFormChange}
-                    className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white ${formErrors.category ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
-                      }`}
-                  >
-                    <option value="">Kategoriya tanlang</option>
-                    {CATEGORIES.map((cat) => (
-                      <option key={cat} value={cat}>{cat}</option>
-                    ))}
-                  </select>
-                  {formErrors.category && <p className="text-xs text-red-500 mt-1">{formErrors.category}</p>}
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm font-medium text-gray-700">Razmerlar *</label>
-                    <button
-                      type="button"
-                      onClick={addSizeRow}
-                      className="text-sm text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
-                    >
-                      <Plus size={16} /> Qo‘shish
-                    </button>
-                  </div>
-                  <div className="space-y-3">
-                    {form.sizes.map((size, idx) => (
-                      <div
-                        key={size._id || idx}
-                        className="flex flex-wrap items-start gap-3 p-3 rounded-lg border border-gray-200"
-                      >
-                        <div className="flex-1 min-w-[70px]">
-                          <label className="block text-xs text-gray-500 mb-0.5">Razmer</label>
-                          <input
-                            type="number"
-                            step="0.1"
-                            min="0.1"
-                            value={size.size}
-                            onChange={(e) => handleSizeChange(idx, 'size', e.target.value)}
-                            className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none ${formErrors[`size-${idx}-size`] ? 'border-red-400' : 'border-gray-300'
-                              }`}
-                          />
-                        </div>
-                        <div className="flex-1 min-w-[70px]">
-                          <label className="block text-xs text-gray-500 mb-0.5">Narx ($)</label>
-                          <input
-                            type="number"
-                            step="0.01"
-                            min="0.01"
-                            value={size.price}
-                            onChange={(e) => handleSizeChange(idx, 'price', e.target.value)}
-                            className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none ${formErrors[`size-${idx}-price`] ? 'border-red-400' : 'border-gray-300'
-                              }`}
-                          />
-                        </div>
-                        <div className="flex-1 min-w-[70px]">
-                          <label className="block text-xs text-gray-500 mb-0.5">Qutilar soni</label>
-                          <input
-                            type="number"
-                            step="1"
-                            min="0"
-                            value={size.boxes}
-                            onChange={(e) => handleSizeChange(idx, 'boxes', e.target.value)}
-                            className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none ${formErrors[`size-${idx}-boxes`] ? 'border-red-400' : 'border-gray-300'
-                              }`}
-                          />
-                        </div>
-                        <div className="flex-1 min-w-[70px]">
-                          <label className="block text-xs text-gray-500 mb-0.5">Quti kg</label>
-                          <input
-                            type="number"
-                            step="0.1"
-                            min="0.1"
-                            value={size.box_kg}
-                            onChange={(e) => handleSizeChange(idx, 'box_kg', e.target.value)}
-                            className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none ${formErrors[`size-${idx}-box_kg`] ? 'border-red-400' : 'border-gray-300'
-                              }`}
-                          />
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => removeSizeRow(idx)}
-                          className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition self-center mt-4 disabled:opacity-30 disabled:cursor-not-allowed"
-                          disabled={form.sizes.length <= 1}
-                          title={form.sizes.length <= 1 ? 'Kamida bitta Razmer qolishi kerak' : 'Razmerni olib tashlash'}
-                        >
-                          <X size={18} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
-                  <button
-                    type="button"
-                    onClick={closeModal}
-                    disabled={saving}
-                    className="px-5 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition text-sm font-medium disabled:opacity-50"
-                  >
-                    Bekor qilish
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={saving}
-                    className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
-                  >
-                    {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-                    {editingProduct ? 'Yangilash' : 'Yaratish'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
-
-        {/* ====== Confirm dialog ====== */}
-        <ConfirmDialog
-          open={!!confirmState}
-          title={confirmState ? confirmCopy[confirmState.type].title : ''}
-          message={confirmState ? confirmCopy[confirmState.type].message(confirmState.payload) : ''}
-          confirmLabel={confirmState ? confirmCopy[confirmState.type].confirmLabel : ''}
-          danger={confirmState ? confirmCopy[confirmState.type].danger : true}
-          onConfirm={handleConfirm}
-          onCancel={() => setConfirmState(null)}
-        />
-
-        {/* ====== Toast ====== */}
-        <Toast toast={toast} onClose={() => setToast(null)} />
       </div>
     </div>
+  );
+
+  // ============================================================
+  // MAIN RENDER
+  // ============================================================
+  return (
+    <>
+      {/* Content: either detail or list */}
+      {productId ? renderDetail() : renderList()}
+
+      {/* ====== Create / Edit Modal ====== */}
+      {modalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/40 backdrop-blur-sm"
+          onClick={closeModal}
+        >
+          <div
+            className="bg-white w-full max-w-2xl rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto p-6 relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={closeModal}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 disabled:opacity-40"
+              disabled={saving}
+            >
+              <X size={24} />
+            </button>
+
+            <h2 className="text-2xl font-bold text-gray-900 mb-1">
+              {editingProduct ? 'Mahsulotni tahrirlash' : 'Yangi mahsulot qo‘shish'}
+            </h2>
+            <p className="text-sm text-gray-500 mb-6">
+              {editingProduct ? 'Ma’lumotlarni o‘zgartiring va saqlang.' : 'Barcha maydonlarni to‘ldiring.'}
+            </p>
+
+            <form onSubmit={handleSubmit} className="space-y-5">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Mahsulot nomi *
+                </label>
+                <input
+                  type="text"
+                  name="name"
+                  value={form.name}
+                  onChange={handleFormChange}
+                  className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none ${formErrors.name ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
+                    }`}
+                />
+                {formErrors.name && <p className="text-xs text-red-500 mt-1">{formErrors.name}</p>}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Kategoriya *
+                </label>
+                <select
+                  name="category"
+                  value={form.category}
+                  onChange={handleFormChange}
+                  className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white ${formErrors.category ? 'border-red-400' : 'border-gray-300 focus:border-blue-500'
+                    }`}
+                >
+                  <option value="">Kategoriya tanlang</option>
+                  {CATEGORIES.map((cat) => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+                {formErrors.category && <p className="text-xs text-red-500 mt-1">{formErrors.category}</p>}
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium text-gray-700">Razmerlar *</label>
+                  <button
+                    type="button"
+                    onClick={addSizeRow}
+                    className="text-sm text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
+                  >
+                    <Plus size={16} /> Qo‘shish
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  {form.sizes.map((size, idx) => (
+                    <div
+                      key={size._id || idx}
+                      className="flex flex-wrap items-start gap-3 p-3 rounded-lg border border-gray-200"
+                    >
+                      <div className="flex-1 min-w-[70px]">
+                        <label className="block text-xs text-gray-500 mb-0.5">Razmer</label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0.1"
+                          value={size.size}
+                          onChange={(e) => handleSizeChange(idx, 'size', e.target.value)}
+                          className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none ${formErrors[`size-${idx}-size`] ? 'border-red-400' : 'border-gray-300'
+                            }`}
+                        />
+                      </div>
+                      <div className="flex-1 min-w-[70px]">
+                        <label className="block text-xs text-gray-500 mb-0.5">Narx ($)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          value={size.price}
+                          onChange={(e) => handleSizeChange(idx, 'price', e.target.value)}
+                          className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none ${formErrors[`size-${idx}-price`] ? 'border-red-400' : 'border-gray-300'
+                            }`}
+                        />
+                      </div>
+                      <div className="flex-1 min-w-[70px]">
+                        <label className="block text-xs text-gray-500 mb-0.5">SHT</label>
+                        <input
+                          type="number"
+                          step="1"
+                          min="0"
+                          value={size.boxes}
+                          onChange={(e) => handleSizeChange(idx, 'boxes', e.target.value)}
+                          className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none ${formErrors[`size-${idx}-boxes`] ? 'border-red-400' : 'border-gray-300'
+                            }`}
+                        />
+                      </div>
+                      <div className="flex-1 min-w-[70px]">
+                        <label className="block text-xs text-gray-500 mb-0.5">SHT kg</label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0.1"
+                          value={size.box_kg}
+                          onChange={(e) => handleSizeChange(idx, 'box_kg', e.target.value)}
+                          className={`w-full px-3 py-1.5 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none ${formErrors[`size-${idx}-box_kg`] ? 'border-red-400' : 'border-gray-300'
+                            }`}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeSizeRow(idx)}
+                        className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition self-center mt-4 disabled:opacity-30 disabled:cursor-not-allowed"
+                        disabled={form.sizes.length <= 1}
+                        title={form.sizes.length <= 1 ? 'Kamida bitta Razmer qolishi kerak' : 'Razmerni olib tashlash'}
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  disabled={saving}
+                  className="px-5 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition text-sm font-medium disabled:opacity-50"
+                >
+                  Bekor qilish
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium shadow-sm transition disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                >
+                  {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+                  {editingProduct ? 'Yangilash' : 'Yaratish'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ====== Confirm dialog ====== */}
+      <ConfirmDialog
+        open={!!confirmState}
+        title={confirmState ? confirmCopy[confirmState.type].title : ''}
+        message={confirmState ? confirmCopy[confirmState.type].message(confirmState.payload) : ''}
+        confirmLabel={confirmState ? confirmCopy[confirmState.type].confirmLabel : ''}
+        danger={confirmState ? confirmCopy[confirmState.type].danger : true}
+        onConfirm={handleConfirm}
+        onCancel={() => setConfirmState(null)}
+      />
+
+      {/* ====== Toast ====== */}
+      <Toast toast={toast} onClose={() => setToast(null)} />
+    </>
   );
 };
