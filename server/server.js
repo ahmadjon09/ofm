@@ -272,7 +272,7 @@ const userSchema = new mongoose.Schema(
         isActive: { type: Boolean, default: true },
         // Telegram bot orqali "raqamni ulashish" bosilgach shu yerga yoziladi.
         // Shu maydon orqali bot foydalanuvchini keyingi safar avtomatik tanib oladi.
-        telegramId: { type: Number, default: null, index: true, sparse: true, unique: true },
+        // telegramId: { type: Number, default: null, index: true, sparse: true, unique: true },
         telegramLinkedAt: { type: Date, default: null },
     },
     { timestamps: true, versionKey: 'version' }
