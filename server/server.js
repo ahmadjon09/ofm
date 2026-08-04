@@ -194,6 +194,7 @@ async function kassaAddExpense(amount, { reason = '', user = null } = {}) {
     return kassa;
 }
 
+
 const userSchema = new mongoose.Schema(
     {
         name: { type: String, required: true, trim: true },
@@ -953,6 +954,41 @@ const kassaController = {
         const updated = await kassaAddExpense(amount, { reason: String(reason).trim(), user: req.user._id });
 
         return sendSuccess(res, 200, "Chiqim muvaffaqiyatli yozildi.", { balance: updated.balance });
+    },
+    async deleteHistory(req, res) {
+        const { id } = req.params;
+
+        if (!isValidObjectId(id)) {
+            throw new ApiError(400, "Noto'g'ri ID.");
+        }
+
+        const transaction = await KassaTransaction.findById(id);
+
+        if (!transaction) {
+            throw new ApiError(404, "Kassa tarixi topilmadi.");
+        }
+
+        const kassa = await getKassaDoc();
+
+        if (transaction.type === "KIRIM") {
+            if (kassa.balance < transaction.amount) {
+                throw new ApiError(
+                    400,
+                    "Bu kirimni o'chirib bo'lmaydi. Kassada yetarli mablag' yo'q."
+                );
+            }
+
+            kassa.balance -= transaction.amount;
+        } else if (transaction.type === "CHIQIM") {
+            kassa.balance += transaction.amount;
+        }
+
+        await kassa.save();
+        await transaction.deleteOne();
+
+        return sendSuccess(res, 200, "Kassa tarixi o'chirildi.", {
+            balance: kassa.balance,
+        });
     },
 
     async income(req, res) {
@@ -2467,6 +2503,7 @@ router.delete('/orders/:id', authenticate, authorize('admin'), orderController.r
 
 router.get('/kassa', authenticate, authorize('admin', 'manager'), kassaController.get);
 router.get('/kassa/history', authenticate, authorize('admin', 'manager'), kassaController.history);
+router.delete('/kassa/del/:id', authenticate, authorize('admin', "manager"), kassaController.deleteHistory)
 router.post('/kassa/expense', authenticate, authorize('admin', 'manager'), kassaController.expense);
 router.post('/kassa/income', authenticate, authorize('admin', 'manager'), kassaController.income);
 router.patch('/kassa/history/:id', authenticate, authorize('admin', 'manager'), kassaController.updateHistoryNote);

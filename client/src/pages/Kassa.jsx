@@ -19,6 +19,7 @@ import {
     Search,
     Pencil,
     Save,
+    Trash2,
 } from 'lucide-react';
 
 const KASSA_URL = '/kassa';
@@ -40,6 +41,35 @@ const Toast = ({ toast, onClose }) => {
                 <button onClick={onClose} className="text-white/70 hover:text-white">
                     <X size={16} />
                 </button>
+            </div>
+        </div>
+    );
+};
+
+const ConfirmDialog = ({ open, title, message, confirmLabel = 'Tasdiqlash', danger = true, onConfirm, onCancel }) => {
+    if (!open) return null;
+    return (
+        <div
+            className="fixed inset-0 z-[90] flex items-center justify-center px-4 bg-black/40 backdrop-blur-sm"
+            onClick={onCancel}
+        >
+            <div className="bg-white w-full max-w-sm rounded-2xl shadow-xl p-6" onClick={(e) => e.stopPropagation()}>
+                <h3 className="text-lg font-semibold text-gray-900 mb-1">{title}</h3>
+                <p className="text-sm text-gray-500 mb-6">{message}</p>
+                <div className="flex justify-end gap-3">
+                    <button
+                        onClick={onCancel}
+                        className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                    >
+                        Bekor qilish
+                    </button>
+                    <button
+                        onClick={onConfirm}
+                        className={`px-4 py-2 text-sm font-medium text-white rounded-lg shadow-sm ${danger ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}`}
+                    >
+                        {confirmLabel}
+                    </button>
+                </div>
             </div>
         </div>
     );
@@ -424,6 +454,8 @@ export const Kassa = () => {
     const [editSaving, setEditSaving] = useState(false);
     const [editErrors, setEditErrors] = useState({});
 
+    const [confirmState, setConfirmState] = useState(null);
+
     const [toast, setToast] = useState(null);
     const toastTimer = useRef(null);
 
@@ -772,6 +804,31 @@ export const Kassa = () => {
         }
     };
 
+    const requestDeleteTransaction = (tx) => {
+        setConfirmState({
+            type: 'delete-transaction',
+            payload: tx,
+        });
+    };
+
+    const handleConfirmDelete = async () => {
+        if (!confirmState || confirmState.type !== 'delete-transaction') return;
+        const { payload } = confirmState;
+        try {
+            await api.delete(`/kassa/del/${payload._id}`);
+            showToast('Operatsiya o‘chirildi.', 'success');
+            if (transactionId && payload._id === transactionId) {
+                navigate('/kassa');
+            }
+            await mutateBalance();
+            await mutateHistory();
+        } catch (err) {
+            showToast(err.response?.data?.message || err.message || 'O‘chirishda xatolik.', 'error');
+        } finally {
+            setConfirmState(null);
+        }
+    };
+
     const isLoading = balanceLoading || historyLoading;
 
     if (transactionId) {
@@ -929,6 +986,12 @@ export const Kassa = () => {
                             className="px-5 py-2.5 bg-gray-700 hover:bg-gray-800 text-white rounded-lg text-sm font-medium shadow-sm transition flex items-center gap-2"
                         >
                             <Printer size={16} /> Chop etish
+                        </button>
+                        <button
+                            onClick={() => requestDeleteTransaction(transaction)}
+                            className="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium shadow-sm transition flex items-center gap-2"
+                        >
+                            <Trash2 size={16} /> O‘chirish
                         </button>
                     </div>
                 </div>
@@ -1146,6 +1209,13 @@ export const Kassa = () => {
                                                                 title="Tahrirlash"
                                                             >
                                                                 <Pencil size={18} />
+                                                            </button>
+                                                            <button
+                                                                onClick={() => requestDeleteTransaction(tx)}
+                                                                className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                                                                title="O‘chirish"
+                                                            >
+                                                                <Trash2 size={18} />
                                                             </button>
                                                         </div>
                                                     </td>
@@ -1521,6 +1591,20 @@ export const Kassa = () => {
                         </div>
                     </div>
                 )}
+
+                <ConfirmDialog
+                    open={!!confirmState}
+                    title="Operatsiyani o‘chirish"
+                    message={
+                        confirmState?.payload
+                            ? `“${confirmState.payload.reason || confirmState.payload.source || 'Izohsiz'}” operatsiyasini o‘chirishni tasdiqlaysizmi?`
+                            : ''
+                    }
+                    confirmLabel="O‘chirish"
+                    danger={true}
+                    onConfirm={handleConfirmDelete}
+                    onCancel={() => setConfirmState(null)}
+                />
 
                 <Toast toast={toast} onClose={() => setToast(null)} />
             </div>
