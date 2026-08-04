@@ -1,10 +1,3 @@
-// ============================================================================
-// SERVER.JS — Ombor va Savdo Boshqaruv Tizimi Backend API
-// Node.js + Express.js + MongoDB (Mongoose) — Single File Architecture
-// Bu fayl kelajakda models/, routes/, controllers/, middleware/, utils/
-// papkalariga bo'linishga tayyor tarzda, aniq bo'limlarga ajratilgan holda yozilgan.
-// ============================================================================
-
 import 'dotenv/config';
 import express from 'express';
 import mongoose from 'mongoose';
@@ -23,13 +16,7 @@ import { v4 as uuidv4 } from 'uuid';
 import validator from 'validator';
 import ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
-import axios from 'axios'
-// import { startBot } from './bot.js';
-
-// ============================================================================
-// SECTION: ENVIRONMENT VALIDATION
-// (future: utils/validateEnv.js)
-// ============================================================================
+import axios from 'axios';
 
 const REQUIRED_ENV_VARS = ['MONGO_URI', 'JWT_SECRET', 'JWT_REFRESH_SECRET', 'PORT'];
 
@@ -54,11 +41,6 @@ const config = {
     corsOrigin: process.env.CORS_ORIGIN || '*',
 };
 
-// ============================================================================
-// SECTION: CONSOLE COLORS & STARTUP BANNER
-// (future: utils/logger.js)
-// ============================================================================
-
 const colors = {
     reset: '\x1b[0m',
     green: '\x1b[32m',
@@ -81,11 +63,6 @@ ${colors.yellow}  Muhit: ${config.nodeEnv} | Port: ${config.port}${colors.reset}
 `);
 }
 
-// ============================================================================
-// SECTION: DATABASE CONNECTION
-// (future: config/database.js)
-// ============================================================================
-
 mongoose.set('strictQuery', true);
 
 async function connectDatabase() {
@@ -103,7 +80,6 @@ async function connectDatabase() {
     }
 }
 
-// Reconnect handling
 mongoose.connection.on('disconnected', () => {
     console.warn(`${colors.yellow}[MongoDB] Ulanish uzildi. Qayta ulanishga urinilmoqda...${colors.reset}`);
 });
@@ -115,11 +91,6 @@ mongoose.connection.on('reconnected', () => {
 mongoose.connection.on('error', (err) => {
     console.error(`${colors.red}[MongoDB] Ulanish xatosi: ${err.message}${colors.reset}`);
 });
-
-// ============================================================================
-// SECTION: CUSTOM ERROR CLASS & RESPONSE HELPERS
-// (future: utils/ApiError.js, utils/response.js)
-// ============================================================================
 
 class ApiError extends Error {
     constructor(statusCode, message, errors = null) {
@@ -141,17 +112,11 @@ function sendError(res, statusCode, message, error = null) {
     return res.status(statusCode).json({ success: false, message, error });
 }
 
-// ============================================================================
-// SECTION: VALIDATION HELPERS
-// (future: utils/validators.js)
-// ============================================================================
-
 function isValidObjectId(id) {
     return mongoose.Types.ObjectId.isValid(id);
 }
 
 function isValidPhone(phone) {
-    // Uzbek phone format: +998XXXXXXXXX or 998XXXXXXXXX or 9-digit local
     return validator.isMobilePhone(String(phone).replace(/\s/g, ''), 'any') ||
         /^(\+?998)?[0-9]{9}$/.test(String(phone).replace(/\s/g, ''));
 }
@@ -177,28 +142,17 @@ function buildMeta(total, page, limit) {
     };
 }
 
-// ============================================================================
-// SECTION: MODEL — Kassa (Kassa balansi + tranzaksiyalar tarixi)
-// (future: models/Kassa.js, models/KassaTransaction.js)
-// ============================================================================
-
-// Kassaning har bir kirim/chiqim amali uchun tarix yozuvi (alohida kolleksiyada
-// saqlanadi, shunda kassa hujjati o'zi yengil bo'lib qoladi va tarix cheksiz o'sishi mumkin).
 const kassaTransactionSchema = new mongoose.Schema(
     {
         type: { type: String, required: true, enum: ['KIRIM', 'CHIQIM'] },
         amount: { type: Number, required: true, min: 0.01 },
-        // CHIQIM uchun: nimaga olingani. KIRIM uchun: izoh (masalan qarz to'lovi).
         reason: { type: String, default: '', trim: true },
-        // Agar kirim mijoz to'lovidan bo'lsa — mijozga bog'lanadi.
         client: { type: mongoose.Schema.Types.ObjectId, ref: 'Client', default: null },
         clientName: { type: String, default: null },
-        // Amalni bajargan foydalanuvchi (kim bergani / kim olgani).
         user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-        // Ushbu amaldan keyingi kassa balansi (tez ko'rish uchun keshlanadi).
         balanceAfter: { type: Number, required: true },
     },
-    { timestamps: { createdAt: true, updatedAt: false } }
+    { timestamps: { createdAt: true, updatedAt: true } }
 );
 
 kassaTransactionSchema.index({ createdAt: -1 });
@@ -207,7 +161,6 @@ kassaTransactionSchema.index({ client: 1 });
 
 const KassaTransaction = mongoose.model('KassaTransaction', kassaTransactionSchema);
 
-// Kassa — bitta (singleton) hujjat, joriy balansni saqlaydi.
 const kassaSchema = new mongoose.Schema(
     {
         balance: { type: Number, default: 0 },
@@ -217,51 +170,29 @@ const kassaSchema = new mongoose.Schema(
 
 const Kassa = mongoose.model('Kassa', kassaSchema);
 
-/**
- * Yagona kassa hujjatini qaytaradi, mavjud bo'lmasa yaratadi.
- */
-async function getKassaDoc(session = null) {
-    let kassa = await Kassa.findOne().session(session);
+async function getKassaDoc() {
+    let kassa = await Kassa.findOne();
     if (!kassa) {
-        const created = await Kassa.create([{ balance: 0 }], session ? { session } : undefined);
-        kassa = created[0];
+        kassa = await Kassa.create({ balance: 0 });
     }
     return kassa;
 }
 
-/**
- * Kassaga kirim (pul kelishi) qo'shadi — masalan mijoz qarzini to'lasa.
- * Kim (mijoz) qancha pul berganini tarixga yozadi.
- */
-async function kassaAddIncome(amount, { client = null, clientName = null, note = '', user = null } = {}, session = null) {
-    const kassa = await getKassaDoc(session);
+async function kassaAddIncome(amount, { client = null, clientName = null, note = '', user = null } = {}) {
+    const kassa = await getKassaDoc();
     kassa.balance = (kassa.balance || 0) + amount;
-    await kassa.save(session ? { session } : undefined);
-    await KassaTransaction.create(
-        [{ type: 'KIRIM', amount, reason: note, client, clientName, user, balanceAfter: kassa.balance }],
-        session ? { session } : undefined
-    );
+    await kassa.save();
+    await KassaTransaction.create({ type: 'KIRIM', amount, reason: note, client, clientName, user, balanceAfter: kassa.balance });
     return kassa;
 }
 
-/**
- * Kassadan chiqim (pul chiqishi) qiladi — nimaga va necha pul olinganini tarixga yozadi.
- */
-async function kassaAddExpense(amount, { reason = '', user = null } = {}, session = null) {
-    const kassa = await getKassaDoc(session);
+async function kassaAddExpense(amount, { reason = '', user = null } = {}) {
+    const kassa = await getKassaDoc();
     kassa.balance = (kassa.balance || 0) - amount;
-    await kassa.save(session ? { session } : undefined);
-    await KassaTransaction.create(
-        [{ type: 'CHIQIM', amount, reason, user, balanceAfter: kassa.balance }],
-        session ? { session } : undefined
-    );
+    await kassa.save();
+    await KassaTransaction.create({ type: 'CHIQIM', amount, reason, user, balanceAfter: kassa.balance });
     return kassa;
 }
-
-// ============================================================================
-// SECTION: MODEL — User
-// (future: models/User.js)
-// ============================================================================
 
 const userSchema = new mongoose.Schema(
     {
@@ -270,9 +201,6 @@ const userSchema = new mongoose.Schema(
         password: { type: String, required: true, minlength: 6, select: false },
         role: { type: String, enum: ['admin', 'manager', 'worker'], default: 'worker' },
         isActive: { type: Boolean, default: true },
-        // Telegram bot orqali "raqamni ulashish" bosilgach shu yerga yoziladi.
-        // Shu maydon orqali bot foydalanuvchini keyingi safar avtomatik tanib oladi.
-        // telegramId: { type: Number, default: null, index: true, sparse: true, unique: true },
         telegramLinkedAt: { type: Date, default: null },
     },
     { timestamps: true, versionKey: 'version' }
@@ -296,23 +224,17 @@ userSchema.methods.toSafeObject = function toSafeObject() {
 
 const User = mongoose.model('User', userSchema);
 
-// ============================================================================
-// SECTION: MODEL — Product
-// (future: models/Product.js)
-// ============================================================================
-
 const productSizeSchema = new mongoose.Schema(
     {
         size: { type: Number, required: true, min: 0 },
         price: { type: Number, required: true, min: 0 },
         boxes: { type: Number, required: true, min: 0, default: 0 },
         box_kg: { type: Number, required: true, min: 0 },
-        total: { type: Number, default: 0 }, // auto = boxes * box_kg
+        total: { type: Number, default: 0 },
     },
     { _id: true }
 );
 
-// Recalculate each size's total before validation runs
 productSizeSchema.pre('validate', function calcSizeTotal(next) {
     this.total = (this.boxes || 0) * (this.box_kg || 0);
     next();
@@ -336,7 +258,6 @@ const productSchema = new mongoose.Schema(
 productSchema.index({ name: 1 });
 productSchema.index({ category: 1 });
 
-// Recalculate every size's total before saving the parent document
 productSchema.pre('save', function calcAllTotals(next) {
     this.sizes.forEach((s) => {
         s.total = (s.boxes || 0) * (s.box_kg || 0);
@@ -344,22 +265,15 @@ productSchema.pre('save', function calcAllTotals(next) {
     next();
 });
 
-// total = sum of all size.total (total kg across all sizes)
 productSchema.virtual('total').get(function getTotalKg() {
     return (this.sizes || []).reduce((sum, s) => sum + (s.total || 0), 0);
 });
 
-// totalPrice = sum(size.total * size.price)
 productSchema.virtual('totalPrice').get(function getTotalPrice() {
     return (this.sizes || []).reduce((sum, s) => sum + (s.total || 0) * (s.price || 0), 0);
 });
 
 const Product = mongoose.model('Product', productSchema);
-
-// ============================================================================
-// SECTION: MODEL — Client
-// (future: models/Client.js)
-// ============================================================================
 
 const paymentHistorySchema = new mongoose.Schema(
     {
@@ -393,15 +307,10 @@ clientSchema.virtual('totalPaid').get(function getTotalPaid() {
     return (this.paymentHistory || []).reduce((sum, p) => sum + (p.amount || 0), 0);
 });
 
-// remainingDebt mirrors the stored debt field (kept non-negative at all times)
 clientSchema.virtual('remainingDebt').get(function getRemainingDebt() {
     return Math.max(this.debt || 0, 0);
 });
 
-/**
- * To'lov qo'shish va qarzni kamaytirish uchun instance method.
- * Qarz hech qachon manfiy bo'lmasligi ta'minlanadi.
- */
 clientSchema.methods.addPayment = async function addPayment(amount, note, userId) {
     this.paymentHistory.push({ amount, note, user: userId, date: new Date() });
     this.debt = (this.debt || 0) - amount;
@@ -411,22 +320,17 @@ clientSchema.methods.addPayment = async function addPayment(amount, note, userId
 
 const Client = mongoose.model('Client', clientSchema);
 
-// ============================================================================
-// SECTION: MODEL — Order
-// (future: models/Order.js)
-// ============================================================================
-
 const orderItemSchema = new mongoose.Schema(
     {
         product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
         productName: { type: String, required: true },
         productCategory: { type: String },
         size: { type: Number, required: true },
-        quantityBoxes: { type: Number, required: true, min: 1 }, // qutilar (SHT) soni
-        boxKg: { type: Number, required: true, min: 0 }, // bitta quti necha kg (savdo vaqtidagi qiymat)
+        quantityBoxes: { type: Number, required: true, min: 1 },
+        boxKg: { type: Number, required: true, min: 0 },
         quantityKg: { type: Number, required: true, min: 0.01 },
         pricePerKg: { type: Number, required: true, min: 0 },
-        subtotal: { type: Number, default: 0 }, // auto = quantityKg * pricePerKg
+        subtotal: { type: Number, default: 0 },
     },
     { _id: true }
 );
@@ -447,10 +351,8 @@ const orderSchema = new mongoose.Schema(
             },
         },
         orderTotal: { type: Number, default: 0 },
-        // Jami ko'rsatkichlar — items massividan avtomatik hisoblanadi (pre('save') hook'da),
-        // shunda har safar frontendda/hisobotda qayta yig'indi chiqarishga hojat qolmaydi.
-        totalKg: { type: Number, default: 0 },       // barcha itemlar bo'yicha jami kg
-        totalBoxes: { type: Number, default: 0 },    // barcha itemlar bo'yicha jami quti (SHT) soni
+        totalKg: { type: Number, default: 0 },
+        totalBoxes: { type: Number, default: 0 },
         status: { type: String, enum: ['pending', 'completed', 'cancelled'], default: 'pending' },
         createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     },
@@ -472,11 +374,6 @@ orderSchema.pre('save', function calcOrderTotal(next) {
 });
 
 const Order = mongoose.model('Order', orderSchema);
-
-// ============================================================================
-// SECTION: MIDDLEWARE — Authentication & Authorization
-// (future: middleware/auth.js)
-// ============================================================================
 
 function signAccessToken(user) {
     return jwt.sign({ id: user._id, role: user.role }, config.jwtSecret, { expiresIn: config.jwtExpiresIn });
@@ -522,17 +419,12 @@ function authorize(...roles) {
     };
 }
 
-// ============================================================================
-// SECTION: MIDDLEWARE — Rate Limiters (DDoS Protection)
-// (future: middleware/rateLimiters.js)
-// ============================================================================
-
 const rateLimitHandler = (req, res) => {
     sendError(res, 429, "Juda ko'p so'rov yuborildi. Iltimos, birozdan so'ng qayta urinib ko'ring.");
 };
 
 const authLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 minute
+    windowMs: 60 * 1000,
     max: 10,
     standardHeaders: true,
     legacyHeaders: false,
@@ -554,6 +446,7 @@ const adminLimiter = rateLimit({
     legacyHeaders: false,
     handler: rateLimitHandler,
 });
+
 const authController = {
     async register(req, res) {
         const { name, phone, password, role } = req.body;
@@ -606,11 +499,6 @@ const authController = {
     },
 };
 
-// ============================================================================
-// SECTION: CONTROLLER — Users (Admin CRUD)
-// (future: controllers/userController.js)
-// ============================================================================
-
 const userController = {
     async list(req, res) {
         const { page, limit, skip } = parsePagination(req.query);
@@ -661,7 +549,6 @@ const userController = {
 
         await user.save();
 
-
         return sendSuccess(res, 200, "Foydalanuvchi muvaffaqiyatli yangilandi.", { user: user.toSafeObject() });
     },
 
@@ -678,11 +565,6 @@ const userController = {
     },
 };
 
-// ============================================================================
-// SECTION: CONTROLLER — Products
-// (future: controllers/productController.js)
-// ============================================================================
-
 const productController = {
     async create(req, res) {
         const { name, category, sizes } = req.body;
@@ -693,7 +575,6 @@ const productController = {
         }
 
         const product = await Product.create({ name, category, sizes });
-
 
         return sendSuccess(res, 201, "Mahsulot muvaffaqiyatli yaratildi.", { product });
     },
@@ -741,7 +622,6 @@ const productController = {
 
         await product.save();
 
-
         return sendSuccess(res, 200, "Mahsulot muvaffaqiyatli yangilandi.", { product });
     },
 
@@ -758,11 +638,6 @@ const productController = {
     },
 };
 
-// ============================================================================
-// SECTION: CONTROLLER — Clients
-// (future: controllers/clientController.js)
-// ============================================================================
-
 const clientController = {
     async create(req, res) {
         const { name, phone, debt } = req.body;
@@ -771,7 +646,6 @@ const clientController = {
         if (!isValidPhone(phone)) throw new ApiError(400, "Telefon raqami noto'g'ri formatda.");
 
         const client = await Client.create({ name, phone, debt });
-
 
         return sendSuccess(res, 201, "Mijoz muvaffaqiyatli yaratildi.", { client });
     },
@@ -819,7 +693,7 @@ const clientController = {
             if (!isValidPhone(phone)) throw new ApiError(400, "Telefon raqami noto'g'ri formatda.");
             client.phone = phone;
         }
-        if (debt) client.debt = debt
+        if (debt) client.debt = debt;
 
         await client.save();
 
@@ -838,11 +712,6 @@ const clientController = {
         return sendSuccess(res, 200, "Mijoz butunlay o'chirildi.");
     },
 
-    /**
-     * Mijoz qarzini to'lashi: qarz kamayadi va to'langan summa avtomatik
-     * ravishda kassaga kirim sifatida qo'shiladi (kim, qancha to'lagani
-     * kassa tarixida ko'rinib turadi).
-     */
     async addPayment(req, res) {
         const { id } = req.params;
         const { amount, note } = req.body;
@@ -873,20 +742,7 @@ const clientController = {
     },
 };
 
-// ============================================================================
-// SECTION: CONTROLLER — Orders
-// (future: controllers/orderController.js)
-// ============================================================================
-
 const orderController = {
-
-    /**
-     * Buyurtma yaratish:
-     * - Bir nechta mahsulot/Razmer bo'lishi mumkin
-     * - Har bir item uchun stock yetarliligini tekshiradi (quti soni bo‘yicha)
-     * - Stockni kamaytiradi (qutilar sonini va total kg ni), mijoz qarzini oshiradi
-     * - Yetarli bo'lmasa — MongoDB transaction orqali to'liq rollback
-     */
     async create(req, res) {
         const { clientId, items, addToDebt } = req.body;
 
@@ -924,10 +780,8 @@ const orderController = {
                         throw new ApiError(400, `Stok yetarli emas: ${product.name} (${size}). Mavjud qutilar: ${sizeEntry.boxes}.`);
                     }
 
-                    // Hisob-kitob: buyurtma qilinayotgan kg miqdori
                     const quantityKg = quantityBoxes * sizeEntry.box_kg;
 
-                    // Narx: agar frontdan yuborilgan bo'lsa, o'shani, aks holda Razmer narxi
                     let finalPricePerKg = sizeEntry.price;
                     if (pricePerKg !== undefined && pricePerKg !== null && pricePerKg !== '') {
                         finalPricePerKg = Number(pricePerKg);
@@ -936,7 +790,6 @@ const orderController = {
                         }
                     }
 
-                    // Stokni qutilar soni bo‘yicha kamaytirish (total pre('save') hook'da qayta hisoblanadi)
                     sizeEntry.boxes -= quantityBoxes;
                     await product.save({ session });
 
@@ -945,9 +798,9 @@ const orderController = {
                         productName: product.name,
                         productCategory: product.category,
                         size: sizeEntry.size,
-                        quantityBoxes,        // qutilar (SHT) soni — hisobotda KAR ustuni
-                        boxKg: sizeEntry.box_kg, // bitta quti necha kg (savdo vaqtidagi qiymat)
-                        quantityKg,          // saqlanadigan kg miqdori
+                        quantityBoxes,
+                        boxKg: sizeEntry.box_kg,
+                        quantityKg,
                         pricePerKg: finalPricePerKg,
                     });
                 }
@@ -978,9 +831,6 @@ const orderController = {
         return sendSuccess(res, 201, "Buyurtma yaratildi.", { order: createdOrder });
     },
 
-    /**
-     * Buyurtmalar ro‘yxati (filtrlash va sahifalash bilan)
-     */
     async list(req, res) {
         const { page, limit, skip } = parsePagination(req.query);
         const { status, clientId, from, to } = req.query;
@@ -1007,9 +857,6 @@ const orderController = {
         return sendSuccess(res, 200, "Buyurtmalar ro'yxati.", { orders }, buildMeta(total, page, limit));
     },
 
-    /**
-     * Bitta buyurtmani ID bo‘yicha olish
-     */
     async getById(req, res) {
         const { id } = req.params;
         if (!isValidObjectId(id)) throw new ApiError(400, "Noto'g'ri ID format.");
@@ -1022,10 +869,6 @@ const orderController = {
         return sendSuccess(res, 200, "Buyurtma topildi.", { order });
     },
 
-    /**
-     * Buyurtma holatini yangilash (pending / completed / cancelled)
-     * Eslatma: bekor qilishda stockni qaytarish hozircha qo‘shilmagan, kerak bo‘lsa qo‘shish mumkin.
-     */
     async updateStatus(req, res) {
         const { id } = req.params;
         const { status } = req.body;
@@ -1043,9 +886,6 @@ const orderController = {
         return sendSuccess(res, 200, "Buyurtma holati yangilandi.", { order });
     },
 
-    /**
-     * Buyurtmani butunlay o‘chirish (qaytarib bo‘lmaydi)
-     */
     async remove(req, res) {
         const { id } = req.params;
         if (!isValidObjectId(id)) throw new ApiError(400, "Noto'g'ri ID format.");
@@ -1059,24 +899,12 @@ const orderController = {
     },
 };
 
-// ============================================================================
-// SECTION: CONTROLLER — Kassa
-// (future: controllers/kassaController.js)
-// ============================================================================
-
 const kassaController = {
-    /**
-     * Joriy kassa balansini qaytaradi (kassada nech pul borligi).
-     */
     async get(req, res) {
         const kassa = await getKassaDoc();
         return sendSuccess(res, 200, "Kassa ma'lumotlari.", { balance: kassa.balance });
     },
 
-    /**
-     * Kassa tarixi: kim qancha pul bergani (KIRIM) va nimaga qancha
-     * pul olingani (CHIQIM) — sahifalab ko'rsatiladi, eng yangisi birinchi.
-     */
     async history(req, res) {
         const { page, limit, skip } = parsePagination(req.query);
         const { type, from, to } = req.query;
@@ -1110,10 +938,6 @@ const kassaController = {
         );
     },
 
-    /**
-     * Kassadan chiqim (pul olib chiqish): nimaga va necha pul
-     * olinganini majburiy kiritish talab qilinadi.
-     */
     async expense(req, res) {
         const { amount, reason } = req.body;
         if (!amount || amount <= 0) throw new ApiError(400, "Chiqim summasi noto'g'ri.");
@@ -1134,39 +958,39 @@ const kassaController = {
     async income(req, res) {
         const { amount, source } = req.body;
 
-        // 1. Validatsiya
         if (!amount || amount <= 0) {
-            throw new ApiError(400, "Kirim summasi musbat son bo‘lishi shart.");
+            throw new ApiError(400, "Kirim summasi musbat son bo'lishi shart.");
         }
         if (!source || !String(source).trim()) {
             throw new ApiError(400, "Kirim manbasi (kimdan yoki nima uchun) kiritilishi shart.");
         }
 
-        // 2. Kassani topib, balansni oshiramiz
-        const kassa = await getKassaDoc();
-        const updated = await kassaAddIncome(
-            amount,
-            {
-                source: String(source).trim(),
-                user: req.user._id,      // kim kiritgan
-                // agar client (mijoz) bog‘lash kerak bo‘lsa, req.body.clientId ham qo‘shing
-            }
-        );
+        const updated = await kassaAddIncome(amount, {
+            note: String(source).trim(),
+            user: req.user._id,
+        });
 
-        // 3. Javob
-        return sendSuccess(
-            res,
-            200,
-            "Kirim muvaffaqiyatli yozildi.",
-            { balance: updated.balance }
-        );
+        return sendSuccess(res, 200, "Kirim muvaffaqiyatli yozildi.", { balance: updated.balance });
+    },
+
+    async updateHistoryNote(req, res) {
+        const { id } = req.params;
+        const { reason } = req.body;
+
+        if (!isValidObjectId(id)) throw new ApiError(400, "Noto'g'ri ID format.");
+        if (reason === undefined || reason === null) {
+            throw new ApiError(400, "Izoh (reason) maydoni kiritilishi shart.");
+        }
+
+        const transaction = await KassaTransaction.findById(id);
+        if (!transaction) throw new ApiError(404, "Kassa tarixida bunday yozuv topilmadi.");
+
+        transaction.reason = String(reason).trim();
+        await transaction.save();
+
+        return sendSuccess(res, 200, "Izoh muvaffaqiyatli yangilandi.", { transaction });
     },
 };
-
-// ============================================================================
-// SECTION: CONTROLLER — Dashboard Statistics
-// (future: controllers/dashboardController.js)
-// ============================================================================
 
 const dashboardController = {
     async stats(req, res) {
@@ -1176,9 +1000,7 @@ const dashboardController = {
         const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
         const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
 
-        // Oxirgi 6 oy uchun boshlanish sanasi (grafik uchun)
         const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
-        // Oxirgi 30 kun uchun boshlanish sanasi
         const thirtyDaysAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29);
 
         const [
@@ -1260,7 +1082,6 @@ const dashboardController = {
 
             Order.find({}).populate('client', 'name phone').sort({ createdAt: -1 }).limit(10).lean(),
 
-            // 1) OYLIK TREND (oxirgi 6 oy) — Line/Bar chart uchun
             Order.aggregate([
                 {
                     $match: {
@@ -1278,7 +1099,6 @@ const dashboardController = {
                 { $sort: { '_id.year': 1, '_id.month': 1 } },
             ]),
 
-            // 2) KUNLIK TREND (oxirgi 30 kun) — Line chart uchun
             Order.aggregate([
                 {
                     $match: {
@@ -1300,7 +1120,6 @@ const dashboardController = {
                 { $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 } },
             ]),
 
-            // 3) STATUS bo'yicha taqsimot — Pie/Donut chart uchun
             Order.aggregate([
                 {
                     $group: {
@@ -1311,7 +1130,6 @@ const dashboardController = {
                 },
             ]),
 
-            // 4) Eng ko'p qarzdor / faol mijozlar TOP-5
             Client.find({})
                 .sort({ debt: -1 })
                 .limit(5)
@@ -1319,13 +1137,11 @@ const dashboardController = {
                 .lean(),
         ]);
 
-        // --- Yordamchi: oy nomlarini o'zbekchada chiqarish ---
         const monthNames = [
             'Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
             'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr',
         ];
 
-        // Oxirgi 6 oyning barcha oylarini (ma'lumot bo'lmasa ham 0 bilan) to'ldirish
         const monthlyTrendMap = new Map(
             monthlyTrend.map((m) => [`${m._id.year}-${m._id.month}`, m])
         );
@@ -1342,7 +1158,6 @@ const dashboardController = {
             });
         }
 
-        // Oxirgi 30 kunni kun-kun to'ldirish
         const dailyTrendMap = new Map(
             dailyTrend.map((d) => [`${d._id.year}-${d._id.month}-${d._id.day}`, d])
         );
@@ -1358,7 +1173,6 @@ const dashboardController = {
             });
         }
 
-        // Status breakdown'ni chart uchun label/value ko'rinishiga o'tkazish
         const statusLabels = {
             pending: 'Kutilmoqda',
             processing: 'Jarayonda',
@@ -1372,14 +1186,12 @@ const dashboardController = {
             total: s.total,
         }));
 
-        // TOP mahsulotlarni chart uchun label/value ko'rinishiga o'tkazish
         const topProductsChart = topProducts.map((p) => ({
             name: p._id,
             quantityKg: p.totalQuantityKg,
             revenue: p.totalRevenue,
         }));
 
-        // O'sish foizini hisoblash (bu oy vs o'tgan oy)
         const currentRevenue = revenueAgg[0]?.total || 0;
         const lastMonthRevenue = lastMonthRevenueAgg[0]?.total || 0;
         const revenueGrowthPercent = lastMonthRevenue > 0
@@ -1390,7 +1202,6 @@ const dashboardController = {
             ? Number((((monthlyOrders - lastMonthOrders) / lastMonthOrders) * 100).toFixed(1))
             : (monthlyOrders > 0 ? 100 : 0);
 
-        // FIX: warehouseValue va warehouseKg totalKgAgg massividan ajratib olinmagan edi
         const warehouseValue = totalKgAgg[0]?.warehouseValue || 0;
         const warehouseKg = totalKgAgg[0]?.warehouseKg || 0;
 
@@ -1429,17 +1240,6 @@ const dashboardController = {
     },
 };
 
-
-// ============================================================================
-// SECTION: REPORTS — Oylik hisobotlar (Excel & PDF)
-// (future: utils/reportHelpers.js, controllers/reportController.js)
-// Bot orqali emas — to'g'ridan-to'g'ri API endpoint orqali ishlaydi:
-//   GET /api/v1/reports/orders?month=iyul&year=2026&format=excel
-//   GET /api/v1/reports/stock?format=pdf
-//   GET /api/v1/reports/debts?format=excel
-//   GET /api/v1/reports/summary?month=7&year=2026&format=pdf
-// ============================================================================
-
 const REPORT_COLORS = {
     headerBg: '1F4E78',
     tableHeaderBg: '2E75B6',
@@ -1458,10 +1258,6 @@ const STATUS_LABELS_UZ = {
     cancelled: 'Bekor qilingan',
 };
 
-/**
- * "iyul", "Iyul", "7", 7 kabi turli formatdagi oy qiymatini
- * 1-12 oraliqdagi raqamga aylantiradi. Berilmasa — joriy oy olinadi.
- */
 function resolveMonthYear(query = {}) {
     const now = new Date();
     let m;
@@ -1518,9 +1314,6 @@ function setDownloadHeaders(res, filename, format) {
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
 }
 
-// ---------------------------------------------------------------------------
-// EXCEL: umumiy sarlavha stili (har bir sheet uchun bir xil ko'rinish)
-// ---------------------------------------------------------------------------
 function styleExcelTitle(sheet, title, subtitle, colSpan) {
     sheet.mergeCells(1, 1, 1, colSpan);
     const titleCell = sheet.getCell(1, 1);
@@ -1556,9 +1349,6 @@ function stripeExcelRow(row, index) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// PDF: umumiy jadval chizuvchi yordamchi (pdfkit'da tayyor table yo'q)
-// ---------------------------------------------------------------------------
 function newPdfDoc() {
     return new PDFDocument({ size: 'A4', margin: 40, bufferPages: true });
 }
@@ -1575,10 +1365,6 @@ function pdfHeader(doc, title, subtitle) {
     doc.y = 86;
 }
 
-/**
- * columns: [{ key, label, width(0-1 nisbat), align }]
- * rows: [{ key: value, ... }]
- */
 function drawPdfTable(doc, { columns, rows }) {
     const startX = doc.page.margins.left;
     const tableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
@@ -1654,10 +1440,6 @@ function pdfFooter(doc) {
     doc.fillColor('#000000');
 }
 
-// ---------------------------------------------------------------------------
-// MA'LUMOT YIG'UVCHI FUNKSIYALAR (data fetchers — barcha hisobotlar uchun umumiy)
-// ---------------------------------------------------------------------------
-
 async function fetchOrdersReportData({ start, end }) {
     const orders = await Order.find({ createdAt: { $gte: start, $lte: end } })
         .populate('client', 'name phone')
@@ -1717,22 +1499,17 @@ async function fetchDebtsReportData() {
     return { clients, debtors, totalDebt };
 }
 
-/**
- * Bitta mijozning barcha buyurtmalari + to'lov tarixini yig'ib, oylarga
- * guruhlaydi. Har oy: { key, monthName, year, items: [...], payments: [...] }.
- * items va payments createdAt/date bo'yicha xronologik tartiblangan.
- */
 async function fetchClientLedgerData(clientId) {
     const client = await Client.findById(clientId).lean({ virtuals: true });
     if (!client) throw new ApiError(404, 'Mijoz topilmadi.');
 
     const orders = await Order.find({ client: clientId }).sort({ createdAt: 1 }).lean();
 
-    const monthsMap = new Map(); // key "YYYY-MM" -> { year, month, monthName, items:[], payments:[] }
+    const monthsMap = new Map();
 
     function getBucket(date) {
         const y = date.getFullYear();
-        const m = date.getMonth(); // 0-based
+        const m = date.getMonth();
         const key = `${y}-${String(m + 1).padStart(2, '0')}`;
         if (!monthsMap.has(key)) {
             monthsMap.set(key, { key, year: y, month: m + 1, monthName: UZ_MONTHS[m], items: [], payments: [] });
@@ -1770,10 +1547,6 @@ async function fetchClientLedgerData(clientId) {
     return { client, months };
 }
 
-// ---------------------------------------------------------------------------
-// EXCEL GENERATORLARI
-// ---------------------------------------------------------------------------
-
 async function buildOrdersExcel({ month, year, monthName, orders, totalOrders, totalRevenue, completed, pending, cancelled, totalKg, totalBoxes }) {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Ombor va Savdo Boshqaruv Tizimi';
@@ -1800,7 +1573,6 @@ async function buildOrdersExcel({ month, year, monthName, orders, totalOrders, t
         orderIndex += 1;
         order.items.forEach((item, i) => {
             const r = sheet.rowCount + 1;
-            // Eski (boxKg qo'shilishidan oldingi) buyurtmalarda quti ma'lumoti bo'lmasligi mumkin.
             const hasBoxData = item.quantityBoxes != null && item.boxKg != null;
             const row = sheet.addRow([
                 i === 0 ? orderIndex : '',
@@ -1868,8 +1640,6 @@ async function buildStockExcel({ rows, totalKg, totalValue, totalBoxes }) {
             idx + 1, r.product, r.category, r.size, r.boxes, r.boxKg,
             { formula: `E${rn}*F${rn}` }, { formula: `G${rn}*H${rn}` },
         ]);
-        // Narx (r.price) yashirin holda H ustunidan keyin kerak — value = totalKg*price,
-        // shu sabab qiymatni to'g'ridan-to'g'ri formuladan emas, narx orqali hisoblaymiz:
         row.getCell(8).value = { formula: `G${rn}*${r.price || 0}` };
         row.getCell(7).numFmt = '#,##0.00';
         row.getCell(8).numFmt = '#,##0';
@@ -1931,11 +1701,6 @@ async function buildDebtsExcel({ debtors, totalDebt }) {
     return workbook;
 }
 
-/**
- * Bitta varaqda bo'lim sarlavhasi chizuvchi yordamchi — SummaryExcel uchun.
- * Har chaqiriqda joriy oxirgi qatordan pastroqqa yangi bo'lim boshlaydi,
- * shu bilan bir nechta workbook/worksheet o'rniga faqat BITTA varaq ishlatiladi.
- */
 function addSummarySection(sheet, title, colSpan) {
     sheet.addRow([]);
     const r = sheet.rowCount + 1;
@@ -1949,13 +1714,6 @@ function addSummarySection(sheet, title, colSpan) {
     sheet.addRow([]);
 }
 
-/**
- * Umumiy oylik hisobot — barcha bo'limlar (umumiy ko'rsatkichlar, buyurtmalar,
- * ombor qoldig'i, mijozlar qarzi) BITTA varaqda, bo'lim-bo'lim pastga qarab
- * joylashtiriladi. Eski versiyada har bo'lim alohida worksheet edi va bu
- * hisobot bir necha marta yaratilganda varaqlar sonining ortib ketishiga
- * (2, 4, 8...) sabab bo'lardi — endi doim bitta workbook, bitta varaq.
- */
 async function buildSummaryExcel({ month, year, monthName, ordersData, stockData, debtsData, kassaBalance }) {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Ombor va Savdo Boshqaruv Tizimi';
@@ -1966,7 +1724,6 @@ async function buildSummaryExcel({ month, year, monthName, ordersData, stockData
 
     styleExcelTitle(sheet, `OYLIK UMUMIY HISOBOT — ${monthName.toUpperCase()} ${year}`, `Yaratilgan sana: ${new Date().toLocaleDateString('uz-UZ')}`, COL_SPAN);
 
-    // --- Bo'lim 1: umumiy ko'rsatkichlar ---
     addSummarySection(sheet, "1. UMUMIY KO'RSATKICHLAR", COL_SPAN);
     const kv = [
         ['Jami buyurtmalar soni', ordersData.totalOrders],
@@ -1987,7 +1744,6 @@ async function buildSummaryExcel({ month, year, monthName, ordersData, stockData
         stripeExcelRow(row, idx);
     });
 
-    // --- Bo'lim 2: buyurtmalar ---
     addSummarySection(sheet, `2. BUYURTMALAR — ${monthName.toUpperCase()} ${year}`, COL_SPAN);
     const ordersHeader = sheet.addRow(['№', 'Sana', 'Mijoz', 'Telefon', 'Mahsulot', "Razmer", 'Quti', 'Miqdor (kg)', 'Narx/kg', 'Summa', 'Status']);
     styleExcelHeaderRow(ordersHeader);
@@ -2010,7 +1766,6 @@ async function buildSummaryExcel({ month, year, monthName, ordersData, stockData
         });
     });
 
-    // --- Bo'lim 3: ombor qoldig'i ---
     addSummarySection(sheet, "3. OMBORDAGI MAHSULOTLAR QOLDIG'I", COL_SPAN);
     const stockHeader = sheet.addRow(['№', 'Mahsulot', 'Kategoriya', "Razmer", 'Quti (dona)', "1 quti (kg)", 'Jami (kg)', 'Qiymat']);
     styleExcelHeaderRow(stockHeader);
@@ -2019,7 +1774,6 @@ async function buildSummaryExcel({ month, year, monthName, ordersData, stockData
         stripeExcelRow(row, idx + 1);
     });
 
-    // --- Bo'lim 4: mijozlar qarzi ---
     addSummarySection(sheet, "4. MIJOZLARNING QARZDORLIGI", COL_SPAN);
     const debtsHeader = sheet.addRow(['№', 'Mijoz', 'Telefon', 'Jami buyurtma', 'Qarz ($)']);
     styleExcelHeaderRow(debtsHeader);
@@ -2036,33 +1790,21 @@ async function buildSummaryExcel({ month, year, monthName, ordersData, stockData
     return workbook;
 }
 
-/**
- * Mijoz jurnal-hisoboti — TORABEK misolidagi kabi: har oy uchun bitta blok
- * (REZBA/SIZE/KAR/KLI/KG/NARH/SUMMA jadvali + to'lovlar ustuni), bloklar
- * bitta varaqda pastma-past ketadi. Har oyning "OST" (o'tgan oydan qolgan
- * qarz) qatori avvalgi oyning "QARZINGIZ" formulasiga bog'lanadi — shu bilan
- * qarz avtomatik oydan-oyga o'tkazib boriladi.
- *
- * Ustunlar: A=Sana(to'lov qatorida)  B=REZBA  C=SIZE  D=KAR(quti)
- *           E=KLI(1 quti kg)  F=KG(=D*E)  G=NARH  H=SUMMA(=F*G)
- *           J=to'lov SUMMA  K=KIMGA  L=SANA
- */
-// ---- rasmdagi ranglar palitrasi -----------------------------------------
 const COLORS = {
-    frameOlive: 'FF9E9662',     // tashqi "ramka" foni (xaki/zaytun)
-    monthHeaderBg: 'FF000000',  // MART / MAY / IYUN / IYUL bloki foni
+    frameOlive: 'FF9E9662',
+    monthHeaderBg: 'FF000000',
     monthHeaderFg: 'FFFFFFFF',
-    yearBg: 'FF00B050',         // 2026 katakchasi
+    yearBg: 'FF00B050',
     yearFg: 'FFFFFFFF',
-    kimgaHeaderBg: 'FF4472C4',  // SUMMA / KIMGA / SANA ustun sarlavhasi
+    kimgaHeaderBg: 'FF4472C4',
     kimgaHeaderFg: 'FFFFFFFF',
-    dateBadgeBlue: 'FFBDD7EE',  // 24-Mar, 03-Jul kabi teg — ko'k
-    dateBadgeYellow: 'FFFFFF00',// 12-May, 25-Jul kabi teg — sariq
-    yangiBg: 'FFFFFF00',        // YANGI qatori
-    ostFg: 'FFFF0000',          // OST — qizil matn
-    jamiBg: 'FF00B0F0',         // JAMI qatori — moviy fon
-    qarzFg: 'FF0070C0',         // "QARZINGIZ" so'zi — moviy
-    qarzAmountFg: 'FFFF0000',   // qarz summasi — qizil, katta
+    dateBadgeBlue: 'FFBDD7EE',
+    dateBadgeYellow: 'FFFFFF00',
+    yangiBg: 'FFFFFF00',
+    ostFg: 'FFFF0000',
+    jamiBg: 'FF00B0F0',
+    qarzFg: 'FF0070C0',
+    qarzAmountFg: 'FFFF0000',
     white: 'FFFFFFFF',
     black: 'FF000000',
 };
@@ -2071,7 +1813,6 @@ function argb(hex) {
     return { argb: hex };
 }
 
-// -- jadval chiziqlari (nozik, kulrang) --
 const THIN_BORDER = {
     top: { style: 'thin', color: argb('FFB2B2B2') },
     left: { style: 'thin', color: argb('FFB2B2B2') },
@@ -2110,49 +1851,33 @@ function applyBorder(sheet, range, border) {
     }
 }
 
-/**
- * buildClientLedgerExcel
- * Mijozning barcha oylardagi xarid va to‘lov jurnalini bitta Excel varaqida,
- * oy-oy bloklar tarzida chiqaradi. Har bir oy ichida mahsulotlar jadvali va
- * to‘lovlar ro‘yxati, shuningdek qarz hisob-kitoblari avtomatik bajariladi.
- *
- * @param {Object} params
- * @param {Object} params.client - Mijoz hujjati (name, phone, debt va boshqalar)
- * @param {Array}  params.months - Har oy uchun ma'lumotlar (items, payments)
- * @returns {ExcelJS.Workbook}
- */
 function buildClientLedgerExcel({ client, months }) {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Ombor va Savdo Boshqaruv Tizimi';
     workbook.created = new Date();
 
-    // Varaq nomi – mijoz ismidan olinadi
     const sheetName = `${client.name}`.replace(/[\\/*?:[\]]/g, ' ').slice(0, 31) || 'Mijoz';
     const sheet = workbook.addWorksheet(sheetName, {
         views: [{ showGridLines: false }],
     });
 
-    // Ustun kengliklari
     sheet.columns = [
-        { width: 12 },  // A - Sana / № (chap tomonda)
-        { width: 18 },  // B - Mahsulot
-        { width: 10 },  // C - Razmer
-        { width: 8 },   // D - SHT (dona)
-        { width: 9 },   // E - KG/1 quti
-        { width: 10 },  // F - KG (jami)
-        { width: 10 },  // G - Narh/kg
-        { width: 12 },  // H - Summa
-        { width: 3 },   // I - ajratuvchi
-        { width: 12 },  // J - To‘lov summa
-        { width: 18 },  // K - Izoh / Qarzingiz
-        { width: 12 },  // L - Sana
+        { width: 12 },
+        { width: 18 },
+        { width: 10 },
+        { width: 8 },
+        { width: 9 },
+        { width: 10 },
+        { width: 10 },
+        { width: 12 },
+        { width: 3 },
+        { width: 12 },
+        { width: 18 },
+        { width: 12 },
     ];
 
-    const ALL_COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'];
-    const LEFT_COLS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
     const RIGHT_COLS = ['J', 'K', 'L'];
 
-    // ---------- Mijoz sarlavhasi (umumiy ma'lumot) ----------
     const titleRow = 1;
     sheet.mergeCells(`A${titleRow}:H${titleRow}`);
     const titleCell = sheet.getCell(`A${titleRow}`);
@@ -2171,17 +1896,13 @@ function buildClientLedgerExcel({ client, months }) {
 
     sheet.getRow(titleRow).height = 30;
 
-    // Sarlavhadan keyin bo‘sh qator
     sheet.addRow([]);
-    const startRow = sheet.rowCount + 1;
 
-    let prevDebtCell = null; // avvalgi oyning "QARZINGIZ" manzili
+    let prevDebtCell = null;
 
-    // Har bir oy uchun blok
     months.forEach((bucket) => {
         const blockStartRow = sheet.rowCount + 1;
 
-        // ========== 1) Oy sarlavhasi ==========
         const monthRow = sheet.rowCount + 1;
         sheet.mergeCells(`B${monthRow}:C${monthRow}`);
         const monthCell = sheet.getCell(`B${monthRow}`);
@@ -2190,7 +1911,6 @@ function buildClientLedgerExcel({ client, months }) {
         monthCell.alignment = { horizontal: 'center', vertical: 'middle' };
         monthCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } };
 
-        // O'ng tomondagi sarlavha (SUMMA, IZOH, SANA)
         RIGHT_COLS.forEach((col) => {
             const c = sheet.getCell(`${col}${monthRow}`);
             c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4472C4' } };
@@ -2198,7 +1918,6 @@ function buildClientLedgerExcel({ client, months }) {
         applyBorder(sheet, `B${monthRow}:C${monthRow}`, THIN_BORDER);
         applyBorder(sheet, `J${monthRow}:L${monthRow}`, THIN_BORDER);
 
-        // ========== 2) Ustun sarlavhalari ==========
         const headerRow = sheet.rowCount + 1;
         const headers = [
             { col: 'A', text: 'Sana' },
@@ -2217,24 +1936,21 @@ function buildClientLedgerExcel({ client, months }) {
             cell.alignment = { horizontal: 'center' };
             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
         });
-        // O'ng ustunlar
         ['J', 'K', 'L'].forEach((col) => {
             const cell = sheet.getCell(`${col}${headerRow}`);
             cell.font = { bold: true };
             cell.alignment = { horizontal: 'center' };
             cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
         });
-        sheet.getCell('J' + headerRow).value = 'To\'lov';
+        sheet.getCell('J' + headerRow).value = "To'lov";
         sheet.getCell('K' + headerRow).value = 'Izoh';
         sheet.getCell('L' + headerRow).value = 'Sana';
 
         applyBorder(sheet, `A${headerRow}:H${headerRow}`, THIN_BORDER);
         applyBorder(sheet, `J${headerRow}:L${headerRow}`, THIN_BORDER);
 
-        // ========== 3) Ma'lumotlar: mahsulot qatorlari va to'lovlar ==========
         const dataStartRow = sheet.rowCount + 1;
 
-        // Mahsulotlarni sana bo'yicha guruhlaymiz (bir xil sana bitta badge)
         const groups = [];
         (bucket.items || []).forEach((item) => {
             const key = item.date || 'SANASIZ';
@@ -2250,7 +1966,7 @@ function buildClientLedgerExcel({ client, months }) {
         const payments = bucket.payments || [];
         let paymentIdx = 0;
 
-        let badgeToggle = 0; // navbat bilan ko'k/sariq
+        let badgeToggle = 0;
 
         groups.forEach((group) => {
             const groupStartRow = sheet.rowCount + 1;
@@ -2259,25 +1975,17 @@ function buildClientLedgerExcel({ client, months }) {
                 const r = sheet.rowCount + 1;
                 const hasBoxData = item.quantityBoxes != null && item.boxKg != null;
 
-                // A - Sana (badge keyingi bosqichda qo'yiladi)
-                // B - Mahsulot
                 sheet.getCell(`B${r}`).value = item.productName;
-                // C - Razmer
                 sheet.getCell(`C${r}`).value = item.size;
-                // D - SHT (quti soni)
                 if (hasBoxData) {
                     sheet.getCell(`D${r}`).value = item.quantityBoxes;
                     sheet.getCell(`E${r}`).value = item.boxKg;
                     sheet.getCell(`F${r}`).value = { formula: `E${r}*D${r}` };
                 } else {
-                    // eski buyurtmalarda quti ma'lumoti bo'lmasa, faqat kg bor
                     sheet.getCell(`F${r}`).value = item.quantityKg;
                 }
-                // G - Narh/kg
                 sheet.getCell(`G${r}`).value = item.pricePerKg;
-                // H - Summa = kg * narh
                 sheet.getCell(`H${r}`).value = { formula: `F${r}*G${r}` };
-                // Formatlash
                 sheet.getCell(`F${r}`).numFmt = '#,##0.00';
                 sheet.getCell(`H${r}`).numFmt = '#,##0.00';
                 applyBorder(sheet, `A${r}:H${r}`, THIN_BORDER);
@@ -2285,7 +1993,6 @@ function buildClientLedgerExcel({ client, months }) {
                     sheet.getCell(`${col}${r}`).alignment = { horizontal: 'center' };
                 });
 
-                // O'ng tomondagi to'lov (agar bor bo'lsa)
                 const payment = payments[paymentIdx];
                 if (payment) {
                     sheet.getCell(`J${r}`).value = payment.amount;
@@ -2303,7 +2010,6 @@ function buildClientLedgerExcel({ client, months }) {
 
             const groupEndRow = sheet.rowCount;
 
-            // A ustuniga sana "badge" qo'yish
             if (group.key) {
                 const badgeColor = badgeToggle % 2 === 0 ? 'FFBDD7EE' : 'FFFFFF00';
                 badgeToggle += 1;
@@ -2318,7 +2024,6 @@ function buildClientLedgerExcel({ client, months }) {
             }
         });
 
-        // Qolgan to'lovlar (mahsulot qatorlari tugagandan keyin)
         while (paymentIdx < payments.length) {
             const r = sheet.rowCount + 1;
             const payment = payments[paymentIdx];
@@ -2336,10 +2041,8 @@ function buildClientLedgerExcel({ client, months }) {
 
         const dataEndRow = sheet.rowCount;
 
-        // Agar hech qanday qator qo'shilmagan bo'lsa, bo'sh qator qoldiramiz
         if (dataEndRow < dataStartRow) sheet.addRow([]);
 
-        // ========== 4) YANGI, OST, JAMI va QARZINGIZ ==========
         sheet.addRow([]);
         const yangiRow = sheet.rowCount + 1;
         sheet.getCell(`G${yangiRow}`).value = 'YANGI';
@@ -2371,7 +2074,6 @@ function buildClientLedgerExcel({ client, months }) {
         sheet.getCell(`H${jamiRow}`).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF00B0F0' } };
         applyBorder(sheet, `G${jamiRow}:H${jamiRow}`, THIN_BORDER);
 
-        // To'lovlar yig'indisi va QARZINGIZ
         const paidTotalRow = jamiRow;
         sheet.getCell(`J${paidTotalRow}`).value = { formula: `SUM(J${dataStartRow}:J${jamiRow - 1})` };
         sheet.getCell(`J${paidTotalRow}`).numFmt = '#,##0';
@@ -2380,50 +2082,39 @@ function buildClientLedgerExcel({ client, months }) {
         sheet.getCell(`K${paidTotalRow}`).font = { bold: true, size: 14, color: { argb: 'FFFF0000' } };
         sheet.getCell(`K${paidTotalRow}`).alignment = { horizontal: 'center' };
 
-        // Qo'shimcha jamilar (SHT, KG)
         const qarzRow = sheet.rowCount + 1;
         sheet.getCell(`D${qarzRow}`).value = { formula: `SUM(D${dataStartRow}:D${dataEndRow})` };
         sheet.getCell(`D${qarzRow}`).font = { bold: true };
         sheet.getCell(`F${qarzRow}`).value = { formula: `SUM(F${dataStartRow}:F${dataEndRow})` };
         sheet.getCell(`F${qarzRow}`).numFmt = '#,##0.00';
         sheet.getCell(`F${qarzRow}`).font = { bold: true };
-        // sheet.getCell(`K${qarzRow}`).value = 'QARZINGIZ';
         sheet.getCell(`K${qarzRow}`).font = { bold: true, color: { argb: 'FF0070C0' } };
         sheet.getCell(`K${qarzRow}`).alignment = { horizontal: 'center' };
         applyBorder(sheet, `D${qarzRow}:F${qarzRow}`, THIN_BORDER);
         applyBorder(sheet, `K${qarzRow}:K${qarzRow}`, THIN_BORDER);
 
-        // Keyingi oy uchun OST manzilini saqlaymiz
         prevDebtCell = `K${paidTotalRow}`;
 
         const blockEndRow = sheet.rowCount;
 
-        // ========== 5) Tashqi ramka va ajratgich ==========
-        // I ustunini zaytun rang bilan to'ldirish (ramka effekti)
         for (let r = blockStartRow; r <= blockEndRow; r += 1) {
             sheet.getCell(`I${r}`).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF9E9662' } };
         }
         applyBorder(sheet, `A${blockStartRow}:H${blockEndRow}`, THICK_BORDER);
         applyBorder(sheet, `J${blockStartRow}:L${blockEndRow}`, THICK_BORDER);
 
-        // Bloklar orasida bo'sh qator
         sheet.addRow([]);
     });
 
     return workbook;
 }
 
-// ---- yordamchi: sana kalitini "24-Mar" ko'rinishiga o'giradi -------------
 function formatBadgeDate(dateStr) {
     const d = new Date(dateStr);
     if (Number.isNaN(d.getTime())) return dateStr;
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     return `${String(d.getDate()).padStart(2, '0')}-${months[d.getMonth()]}`;
 }
-
-// ---------------------------------------------------------------------------
-// PDF GENERATORLARI
-// ---------------------------------------------------------------------------
 
 function buildOrdersPdf({ month, year, monthName, orders, totalOrders, totalRevenue, completed, pending, cancelled, totalKg, totalBoxes }) {
     const doc = newPdfDoc();
@@ -2585,16 +2276,7 @@ function buildSummaryPdf({ month, year, monthName, ordersData, stockData, debtsD
     return doc;
 }
 
-// ---------------------------------------------------------------------------
-// CONTROLLER — Reports
-// (future: controllers/reportController.js)
-// ---------------------------------------------------------------------------
-
 const reportController = {
-    /**
-     * GET /api/v1/reports/orders?month=iyul&year=2026&format=excel|pdf
-     * Berilgan oydagi barcha buyurtmalarni Excel yoki PDF qilib qaytaradi.
-     */
     async orders(req, res) {
         const format = resolveFormat(req.query);
         const { month, year, monthName, start, end } = resolveMonthYear(req.query);
@@ -2615,10 +2297,6 @@ const reportController = {
         doc.end();
     },
 
-    /**
-     * GET /api/v1/reports/stock?format=excel|pdf
-     * Ombordagi joriy qoldiqni (qancha mahsulot qolgani) hisobot qilib qaytaradi.
-     */
     async stock(req, res) {
         const format = resolveFormat(req.query);
         const data = await fetchStockReportData();
@@ -2637,10 +2315,6 @@ const reportController = {
         doc.end();
     },
 
-    /**
-     * GET /api/v1/reports/debts?format=excel|pdf
-     * Mijozlarning jami qarzdorligi bo'yicha hisobot.
-     */
     async debts(req, res) {
         const format = resolveFormat(req.query);
         const data = await fetchDebtsReportData();
@@ -2659,13 +2333,6 @@ const reportController = {
         doc.end();
     },
 
-    /**
-     * GET /api/v1/reports/client/:clientId?format=excel
-     * Bitta mijozning barcha oylardagi buyurtma+to'lov jurnalini TORABEK
-     * misolidagi kabi bitta varaqda, oy-oy bloklar tarzida qaytaradi.
-     * Hozircha faqat Excel qo'llab-quvvatlanadi (formulali jadval PDF'da
-     * ma'nosiz — chunki PDF qayta hisoblanmaydi).
-     */
     async clientLedger(req, res) {
         try {
             const { clientId } = req.params;
@@ -2679,7 +2346,6 @@ const reportController = {
             await workbook.xlsx.write(res);
             return res.end();
         } catch (error) {
-            // Send a proper JSON error
             res.status(error.statusCode || 500).json({
                 success: false,
                 message: error.message || 'Hisobot yaratishda xatolik yuz berdi.',
@@ -2687,10 +2353,6 @@ const reportController = {
         }
     },
 
-    /**
-     * GET /api/v1/reports/summary?month=iyul&year=2026&format=excel|pdf
-     * Bitta faylda: oylik buyurtmalar + ombor qoldig'i + mijozlar qarzi + kassa balansi.
-     */
     async summary(req, res) {
         const format = resolveFormat(req.query);
         const { month, year, monthName, start, end } = resolveMonthYear(req.query);
@@ -2719,23 +2381,14 @@ const reportController = {
     },
 };
 
-// ============================================================================
-// SECTION: EXPRESS APP SETUP
-// (future: app.js)
-// ============================================================================
-
 const app = express();
 
 app.set('trust proxy', 1);
-// app.disable('x-powered-by');
 
-// Security headers
 app.use(helmet());
 
-// Compression
 app.use(compression());
 
-// CORS
 app.use(
     cors({
         origin: config.corsOrigin,
@@ -2743,16 +2396,13 @@ app.use(
     })
 );
 
-// Body parsers with size limits
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 app.use(cookieParser());
 
-// Sanitization against NoSQL injection & HTTP Parameter Pollution
 app.use(mongoSanitize());
 app.use(hpp());
 
-// Request ID + response time logger
 app.use((req, res, next) => {
     req.requestId = uuidv4();
     req.startTime = Date.now();
@@ -2768,22 +2418,14 @@ app.use((req, res, next) => {
     next();
 });
 
-// HTTP request logger (dev-friendly, disabled in test)
 if (config.nodeEnv !== 'test') {
     app.use(morgan(config.nodeEnv === 'production' ? 'combined' : 'dev'));
 }
 
-// General rate limiting applied globally; stricter limiters applied per-route below
 app.use('/api/', generalLimiter);
-
-// ============================================================================
-// SECTION: ROUTES
-// (future: routes/*.routes.js)
-// ============================================================================
 
 const router = express.Router();
 
-// ---- Health ----
 router.get('/health', (req, res) => {
     const dbState = mongoose.connection.readyState === 1 ? 'ulangan' : 'ulanmagan';
     return sendSuccess(res, 200, "Server ishlamoqda.", {
@@ -2794,25 +2436,21 @@ router.get('/health', (req, res) => {
     });
 });
 
-// ---- Auth ----
 router.post('/auth/register', authLimiter, authController.register);
 router.post('/auth/login', authLimiter, authController.login);
 router.get('/auth/me', authenticate, authController.me);
 
-// ---- Users (admin only) ----
 router.get('/users', authenticate, authorize('admin'), adminLimiter, userController.list);
 router.get('/users/:id', authenticate, authorize('admin'), adminLimiter, userController.getById);
 router.put('/users/:id', authenticate, authorize('admin'), adminLimiter, userController.update);
 router.delete('/users/:id', authenticate, authorize('admin'), adminLimiter, userController.remove);
 
-// ---- Products ----
 router.post('/products', authenticate, authorize('admin', 'manager'), productController.create);
 router.get('/products', authenticate, productController.list);
 router.get('/products/:id', authenticate, productController.getById);
 router.put('/products/:id', authenticate, authorize('admin', 'manager'), productController.update);
 router.delete('/products/:id', authenticate, authorize('admin', 'manager'), productController.remove);
 
-// ---- Clients ----
 router.post('/clients', authenticate, authorize('admin', 'manager'), clientController.create);
 router.get('/clients', authenticate, clientController.list);
 router.get('/clients/:id', authenticate, clientController.getById);
@@ -2821,23 +2459,20 @@ router.delete('/clients/:id', authenticate, authorize('admin'), clientController
 router.post('/clients/:id/payments', authenticate, authorize('admin', 'manager'), clientController.addPayment);
 router.get('/clients/:id/payments', authenticate, clientController.paymentHistory);
 
-// ---- Orders ----
 router.post('/orders', authenticate, authorize('admin', 'manager', 'worker'), orderController.create);
 router.get('/orders', authenticate, orderController.list);
 router.get('/orders/:id', authenticate, orderController.getById);
 router.patch('/orders/:id/status', authenticate, authorize('admin', 'manager'), orderController.updateStatus);
 router.delete('/orders/:id', authenticate, authorize('admin'), orderController.remove);
 
-// ---- Kassa ----
 router.get('/kassa', authenticate, authorize('admin', 'manager'), kassaController.get);
 router.get('/kassa/history', authenticate, authorize('admin', 'manager'), kassaController.history);
 router.post('/kassa/expense', authenticate, authorize('admin', 'manager'), kassaController.expense);
 router.post('/kassa/income', authenticate, authorize('admin', 'manager'), kassaController.income);
+router.patch('/kassa/history/:id', authenticate, authorize('admin', 'manager'), kassaController.updateHistoryNote);
 
-// ---- Dashboard ----
 router.get('/dashboard/stats', authenticate, authorize('admin', 'manager'), dashboardController.stats);
 
-// report
 router.get('/reports/orders', authenticate, authorize('admin', 'manager'), reportController.orders);
 router.get('/reports/stock', authenticate, authorize('admin', 'manager'), reportController.stock);
 router.get('/reports/debts', authenticate, authorize('admin', 'manager'), reportController.debts);
@@ -2845,10 +2480,6 @@ router.get('/reports/client/:clientId', authenticate, authorize('admin', 'manage
 router.get('/reports/summary', authenticate, authorize('admin', 'manager'), reportController.summary);
 
 app.use('/api/v1', router);
-
-// ============================================================================
-// SECTION: 404 HANDLER
-// ============================================================================
 
 const keepServerAlive = () => {
     const pingInterval = 12 * 60 * 1000;
@@ -2861,15 +2492,15 @@ const keepServerAlive = () => {
             axios
                 .get(process.env.RENDER_URL)
                 .then(() => console.log('🔄 Server active (Tashkent time)'))
-                .catch(() => console.log('⚠️ Ping failed'))
+                .catch(() => console.log('⚠️ Ping failed'));
         } else {
-            console.log('💤 Keep-alive uyqu rejimida (Tashkent time)')
+            console.log('💤 Keep-alive uyqu rejimida (Tashkent time)');
         }
-    }
+    };
 
     checkAndPing();
     setInterval(checkAndPing, pingInterval);
-}
+};
 
 keepServerAlive();
 
@@ -2877,16 +2508,10 @@ app.use((req, res) => {
     return sendError(res, 404, "So'ralgan manzil topilmadi.");
 });
 
-// ============================================================================
-// SECTION: GLOBAL ERROR HANDLER
-// (future: middleware/errorHandler.js)
-// ============================================================================
-
 app.use((err, req, res, next) => {
     let statusCode = err.statusCode || 500;
     let message = err.message || "Serverda ichki xatolik yuz berdi.";
 
-    // Mongoose validation errors
     if (err.name === 'ValidationError') {
         statusCode = 400;
         message = Object.values(err.errors)
@@ -2894,14 +2519,12 @@ app.use((err, req, res, next) => {
             .join(', ');
     }
 
-    // Mongoose duplicate key error
     if (err.code === 11000) {
         statusCode = 409;
         const field = Object.keys(err.keyValue || {})[0];
         message = `${field} allaqachon mavjud.`;
     }
 
-    // Mongoose CastError (invalid ObjectId etc.)
     if (err.name === 'CastError') {
         statusCode = 400;
         message = "Noto'g'ri ma'lumot formati.";
@@ -2916,10 +2539,6 @@ app.use((err, req, res, next) => {
     return sendError(res, statusCode, message, config.nodeEnv === 'production' ? null : err.stack);
 });
 
-// ============================================================================
-// SECTION: SERVER STARTUP & GRACEFUL SHUTDOWN
-// ============================================================================
-
 let server;
 
 async function startServer() {
@@ -2930,14 +2549,6 @@ async function startServer() {
         console.log(`${colors.green}[Server] http://localhost:${config.port} manzilida ishga tushdi.${colors.reset}`);
         console.log(`${colors.cyan}[API] Asosiy manzil: /api/v1${colors.reset}`);
     });
-
-    // Telegram bot — DB ulanib, modellar ro'yxatdan o'tgandan keyin ishga tushadi.
-    // BOT_TOKEN .env faylida bo'lmasa, bot shunchaki ishga tushmaydi (server ishlashda davom etadi).
-    try {
-        // await startBot();
-    } catch (err) {
-        console.error(`${colors.red}[Bot] Ishga tushirishda xatolik: ${err.message}${colors.reset}`);
-    }
 }
 
 async function gracefulShutdown(signal) {
@@ -2956,7 +2567,6 @@ async function gracefulShutdown(signal) {
             }
         });
 
-        // Force shutdown if not closed within 10s
         setTimeout(() => {
             console.error(`${colors.red}[Server] Majburiy to'xtatildi (timeout).${colors.reset}`);
             process.exit(1);
