@@ -26,6 +26,7 @@ const KASSA_URL = '/kassa';
 const HISTORY_URL = '/kassa/history';
 const EXPENSE_URL = '/kassa/expense';
 const INCOME_URL = '/kassa/income';
+const SUGGESTIONS_URL = '/kassa/suggestions';
 
 const Toast = ({ toast, onClose }) => {
     if (!toast) return null;
@@ -438,6 +439,8 @@ export const Kassa = () => {
     const [expenseForm, setExpenseForm] = useState({ amount: '', reason: '' });
     const [expenseErrors, setExpenseErrors] = useState({});
     const [expenseSaving, setExpenseSaving] = useState(false);
+    const [expenseSuggestions, setExpenseSuggestions] = useState([]);
+    const [suggestionOpen, setSuggestionOpen] = useState(false);
 
     const [groupModalOpen, setGroupModalOpen] = useState(false);
     const [selectedMonth, setSelectedMonth] = useState(() => {
@@ -620,22 +623,50 @@ export const Kassa = () => {
         }
     };
 
+    const fetchExpenseSuggestions = useCallback(async () => {
+        try {
+            const resp = await api.get(`${SUGGESTIONS_URL}?limit=15`);
+            const items = resp.data?.data?.suggestions || [];
+            setExpenseSuggestions(items);
+        } catch {
+            setExpenseSuggestions([]);
+        }
+    }, []);
+
     const openExpenseModal = () => {
         setExpenseForm({ amount: '', reason: '' });
         setExpenseErrors({});
+        setSuggestionOpen(true);
         setExpenseModalOpen(true);
+        fetchExpenseSuggestions();
     };
 
     const closeExpenseModal = () => {
         if (expenseSaving) return;
         setExpenseModalOpen(false);
+        setSuggestionOpen(false);
     };
 
     const handleExpenseChange = (e) => {
         const { name, value } = e.target;
         setExpenseForm({ ...expenseForm, [name]: value });
         setExpenseErrors((prev) => ({ ...prev, [name]: undefined }));
+        if (name === 'reason') setSuggestionOpen(true);
     };
+
+    const pickExpenseSuggestion = (reason) => {
+        setExpenseForm((prev) => ({ ...prev, reason }));
+        setExpenseErrors((prev) => ({ ...prev, reason: undefined }));
+        setSuggestionOpen(false);
+    };
+
+    const filteredExpenseSuggestions = useMemo(() => {
+        const term = (expenseForm.reason || '').trim().toLowerCase();
+        if (!expenseSuggestions.length) return [];
+        return expenseSuggestions
+            .filter((s) => !term || String(s.reason || '').toLowerCase().includes(term))
+            .slice(0, 8);
+    }, [expenseSuggestions, expenseForm.reason]);
 
     const validateExpense = () => {
         const errors = {};
@@ -656,6 +687,7 @@ export const Kassa = () => {
             return;
         }
         setExpenseSaving(true);
+        setSuggestionOpen(false);
         try {
             await api.post(EXPENSE_URL, {
                 amount: Number(expenseForm.amount),
@@ -664,6 +696,7 @@ export const Kassa = () => {
             showToast('Chiqim muvaffaqiyatli yozildi.', 'success');
             await mutateBalance();
             await mutateHistory();
+            fetchExpenseSuggestions();
             setExpenseModalOpen(false);
         } catch (err) {
             showToast(err.response?.data?.message || err.message || 'Xatolik yuz berdi.', 'error');
@@ -1379,14 +1412,33 @@ export const Kassa = () => {
 
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Sabab / Izoh <span className="text-red-500">*</span></label>
-                                    <textarea
-                                        name="reason"
-                                        rows="3"
-                                        value={expenseForm.reason}
-                                        onChange={handleExpenseChange}
-                                        className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 focus:ring-red-500 outline-none transition resize-none ${expenseErrors.reason ? 'border-red-400 bg-red-50' : 'border-gray-300 focus:border-red-500'}`}
-                                        placeholder="Masalan: Ofis anjomlari uchun..."
-                                    />
+                                    <div className="relative">
+                                        <textarea
+                                            name="reason"
+                                            rows="3"
+                                            value={expenseForm.reason}
+                                            onChange={handleExpenseChange}
+                                            onFocus={() => setSuggestionOpen(true)}
+                                            onBlur={() => setTimeout(() => setSuggestionOpen(false), 120)}
+                                            className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 focus:ring-red-500 outline-none transition resize-none ${expenseErrors.reason ? 'border-red-400 bg-red-50' : 'border-gray-300 focus:border-red-500'}`}
+                                            placeholder="Masalan: Ofis anjomlari uchun..."
+                                        />
+                                        {suggestionOpen && filteredExpenseSuggestions.length > 0 && (
+                                            <div className="absolute left-0 right-0 z-50 mt-1 max-h-52 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-xl">
+                                                {filteredExpenseSuggestions.map((s, idx) => (
+                                                    <button
+                                                        key={`${s.reason}-${idx}`}
+                                                        type="button"
+                                                        onMouseDown={() => pickExpenseSuggestion(s.reason)}
+                                                        className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left text-sm transition hover:bg-gray-50"
+                                                    >
+                                                        <span className="text-gray-800 truncate">{s.reason}</span>
+                                                        <span className="shrink-0 text-xs font-medium text-gray-400">{Number(s.count || 0)}x</span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
                                     {expenseErrors.reason && <p className="text-xs text-red-500 mt-1.5 flex items-center gap-1"><AlertCircle size={12} /> {expenseErrors.reason}</p>}
                                 </div>
 

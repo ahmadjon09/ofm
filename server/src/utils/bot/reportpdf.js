@@ -1,7 +1,3 @@
-// ============================================================================
-// utils/reportPdf.js — PDF hisobotlarini yaratish (pdfkit)
-// Barcha funksiyalar Buffer qaytaradi.
-// ============================================================================
 
 import PDFDocument from 'pdfkit';
 import dayjs from 'dayjs';
@@ -16,10 +12,6 @@ function docToBuffer(doc) {
     });
 }
 
-/**
- * Umumiy jadval chizish funksiyasi. Sahifa tugasa avtomatik yangi sahifa ochadi
- * va sarlavha qatorini qayta chizadi.
- */
 function drawTable(doc, { title, headers, rows, colWidths, marginLeft = 40 }) {
     const rowHeight = 22;
     const pageBottom = doc.page.height - doc.page.margins.bottom;
@@ -74,9 +66,6 @@ function newDoc() {
     return new PDFDocument({ size: 'A4', layout: 'landscape', margin: 40 });
 }
 
-// ---------------------------------------------------------------------------
-// 1) MAHSULOTLAR
-// ---------------------------------------------------------------------------
 export async function buildProductsPdf(products, title = 'Mahsulotlar hisoboti (ombor)') {
     const doc = newDoc();
     const rows = [];
@@ -107,9 +96,6 @@ export async function buildProductsPdf(products, title = 'Mahsulotlar hisoboti (
     return docToBuffer(doc);
 }
 
-// ---------------------------------------------------------------------------
-// 2) BUYURTMALAR / SAVDO
-// ---------------------------------------------------------------------------
 export async function buildOrdersPdf(orders, title = 'Savdo hisoboti') {
     const doc = newDoc();
     const rows = [];
@@ -145,9 +131,6 @@ export async function buildOrdersPdf(orders, title = 'Savdo hisoboti') {
     return docToBuffer(doc);
 }
 
-// ---------------------------------------------------------------------------
-// 3) QARZDOR MIJOZLAR
-// ---------------------------------------------------------------------------
 export async function buildDebtorsPdf(clients, title = 'Qarzdor mijozlar') {
     const doc = newDoc();
     let total = 0;
@@ -171,9 +154,6 @@ export async function buildDebtorsPdf(clients, title = 'Qarzdor mijozlar') {
     return docToBuffer(doc);
 }
 
-// ---------------------------------------------------------------------------
-// 4) KASSA TARIXI
-// ---------------------------------------------------------------------------
 export async function buildKassaPdf(history, title = 'Kassa hisoboti') {
     const doc = newDoc();
     let kirimJami = 0;
