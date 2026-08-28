@@ -1,8 +1,3 @@
-// ============================================================================
-// utils/reportExcel.js — Excel (.xlsx) hisobotlarini yaratish
-// Barcha funksiyalar Buffer qaytaradi — bot shu bufferni to'g'ridan-to'g'ri
-// Telegramga fayl sifatida yuboradi (diskka yozmasdan).
-// ============================================================================
 
 import ExcelJS from 'exceljs';
 import dayjs from 'dayjs';
@@ -28,9 +23,6 @@ function addTitle(sheet, title, span) {
     sheet.addRow([]);
 }
 
-// ---------------------------------------------------------------------------
-// 1) MAHSULOTLAR (ombordagi joriy holat) — har bir o'lcham alohida qatorda
-// ---------------------------------------------------------------------------
 export async function buildProductsExcel(products, title = "Mahsulotlar hisoboti (ombor)") {
     const workbook = new ExcelJS.Workbook();
     workbook.created = new Date();
@@ -64,9 +56,6 @@ export async function buildProductsExcel(products, title = "Mahsulotlar hisoboti
     return workbook.xlsx.writeBuffer();
 }
 
-// ---------------------------------------------------------------------------
-// 2) BUYURTMALAR / SAVDO (tanlangan oy uchun) — har bir mahsulot alohida qatorda
-// ---------------------------------------------------------------------------
 export async function buildOrdersExcel(orders, title = "Savdo hisoboti") {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Savdo');
@@ -113,9 +102,6 @@ export async function buildOrdersExcel(orders, title = "Savdo hisoboti") {
     return workbook.xlsx.writeBuffer();
 }
 
-// ---------------------------------------------------------------------------
-// 3) QARZDOR MIJOZLAR
-// ---------------------------------------------------------------------------
 export async function buildDebtorsExcel(clients, title = "Qarzdor mijozlar") {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Qarzdorlar');
@@ -139,9 +125,6 @@ export async function buildDebtorsExcel(clients, title = "Qarzdor mijozlar") {
     return workbook.xlsx.writeBuffer();
 }
 
-// ---------------------------------------------------------------------------
-// 4) KASSA TARIXI
-// ---------------------------------------------------------------------------
 export async function buildKassaExcel(history, title = "Kassa hisoboti") {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Kassa');

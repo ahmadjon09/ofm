@@ -9,10 +9,6 @@ import os from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
 
-// Render (va boshqa ko'p konteyner-hostinglar)da chiquvchi ulanishlar
-// ba'zan IPv6'ni afzal ko'radi, lekin IPv6 egress to'liq ishlamay,
-// "socket hang up" / vaqt tugashi bilan yakunlanadi. IPv4'ni majburlab
-// qo'yish bu muammoning eng keng tarqalgan yechimi.
 dns.setDefaultResultOrder('ipv4first');
 
 import {
@@ -20,23 +16,20 @@ import {
     buildOrdersExcel,
     buildDebtorsExcel,
     buildKassaExcel,
-} from './utils/reportexcel.js';
+} from './src/utils/bot/reportexcel.js';
 import {
     buildProductsPdf,
     buildOrdersPdf,
     buildDebtorsPdf,
     buildKassaPdf,
-} from './utils/reportpdf.js';
+} from './src/utils/bot/reportpdf.js';
 
-// Telegram API'ga (ayniqsa katta fayl yuborishda) barqarorroq ulanish uchun
-// maxsus HTTPS agent: ulanishni saqlab turadi (keepAlive), IPv4'ni majburlaydi
-// va uzunroq kutadi.
 const telegramAgent = new https.Agent({
     keepAlive: true,
     keepAliveMsecs: 10000,
     maxSockets: 50,
-    timeout: 120000, // 120s — katta fayl yuklash uchun yetarli vaqt
-    family: 4, // IPv4'ni majburlash
+    timeout: 120000,
+    family: 4,
 });
 
 const MONTH_NAMES_UZ = [
@@ -44,8 +37,6 @@ const MONTH_NAMES_UZ = [
     'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr',
 ];
 
-// Telefon raqamlarni turlicha formatda (+998..., 998..., bo'sh joylar bilan)
-// solishtirish uchun faqat raqamlarni qoldirib, oxirgi 9 ta raqamini olamiz.
 function normalizePhone(phone) {
     const digits = String(phone || '').replace(/\D/g, '');
     return digits.slice(-9);
@@ -55,9 +46,6 @@ function money(n) {
     return `${Number(n || 0).toLocaleString('ru-RU')} $`;
 }
 
-// ---------------------------------------------------------------------------
-// KEYBOARDLAR
-// ---------------------------------------------------------------------------
 
 function mainMenuKeyboard() {
     return Markup.inlineKeyboard([
@@ -83,10 +71,6 @@ function exportKeyboard(prefix, extra = '') {
     ]);
 }
 
-// ---------------------------------------------------------------------------
-// Hisobot yaratish + yuborishni xavfsiz bajaruvchi wrapper
-// (xato yuz bersa foydalanuvchiga ham, Render logiga ham to'liq ma'lumot beradi)
-// ---------------------------------------------------------------------------
 function isTransientNetworkError(err) {
     const msg = String(err?.message || '');
     return (
@@ -103,7 +87,6 @@ async function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
 }
 
-// Vaqtinchalik fayllar uchun alohida papka (Render'da /tmp yozish uchun ochiq).
 const TMP_DIR = path.join(os.tmpdir(), 'reports');
 
 async function ensureTmpDir() {
@@ -115,17 +98,11 @@ async function sendReport(ctx, { buildFn, args = [], filename }) {
     let buffer;
     let tmpFilePath;
 
-    // Callback tugmasining "toast" xabari tez yo'qolib ketadi va uzoq
-    // hisobotlarda foydalanuvchi hech narsa bo'layotganini bilmay qoladi —
-    // shuning uchun alohida chat xabari yuboramiz va keyin uni yangilaymiz.
     let statusMsg;
     try {
         statusMsg = await ctx.reply('⏳ Hisobot tayyorlanmoqda, biroz kuting...');
     } catch (_) { /* status xabari yuborilmasa ham asosiy jarayon davom etadi */ }
 
-    // ---- 1) Hisobotni xotirada yaratib, DARHOL diskka yozamiz ----
-    // (xotirada uzoq ushlab turmaslik uchun; yirik hisobotlarda ham
-    // process xotirasi kamroq bosim ostida qoladi)
     try {
         console.log(`[Report] Boshlandi: ${filename}`);
         buffer = await buildFn(...args);
@@ -137,7 +114,7 @@ async function sendReport(ctx, { buildFn, args = [], filename }) {
         await ensureTmpDir();
         tmpFilePath = path.join(TMP_DIR, `${randomUUID()}-${filename}`);
         await fs.writeFile(tmpFilePath, buffer);
-        buffer = null; // xotiradan bo'shatamiz, endi fayl diskda
+        buffer = null;
 
         console.log(`[Report] Diskka yozildi: ${tmpFilePath} (${Date.now() - startedAt}ms)`);
     } catch (err) {
@@ -160,8 +137,6 @@ async function sendReport(ctx, { buildFn, args = [], filename }) {
             .catch(() => { });
     }
 
-    // ---- 2) Diskdagi faylni stream sifatida yuboramiz ----
-    // Xato bo'lsa yoki muvaffaqiyatli bo'lsa ham, oxirida faylni albatta o'chiramiz.
     const maxAttempts = 3;
     try {
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -205,17 +180,10 @@ async function sendReport(ctx, { buildFn, args = [], filename }) {
             }
         }
     } finally {
-        // Muvaffaqiyat, xato, yoki qayta urinishlardan qat'i nazar —
-        // vaqtinchalik fayl diskda qolib ketmasligi kerak.
         await fs.unlink(tmpFilePath).catch(() => { });
     }
 }
 
-// ---------------------------------------------------------------------------
-// Botni ishga tushirishda 409 Conflict (eski instance hali to'liq
-// o'chmagan bo'lsa) yuz bersa, bir necha marta kutib qayta urinamiz.
-// Render'da zero-downtime deploy paytida bu normal, o'tkinchi holat.
-// ---------------------------------------------------------------------------
 async function launchWithRetry(bot, maxAttempts = 8) {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
@@ -229,16 +197,13 @@ async function launchWithRetry(bot, maxAttempts = 8) {
                 throw err;
             }
 
-            const waitMs = Math.min(5000 * attempt, 30000); // 5s, 10s, 15s... 30s'gacha
+            const waitMs = Math.min(5000 * attempt, 30000);
             console.log(`[Bot] Eski instance hali faol bo'lishi mumkin, ${waitMs / 1000}s kutib qayta urinamiz...`);
             await sleep(waitMs);
         }
     }
 }
 
-// ---------------------------------------------------------------------------
-// BOTNI ISHGA TUSHIRISH
-// ---------------------------------------------------------------------------
 
 export async function startBot() {
     const token = process.env.BOT_TOKEN;
@@ -247,7 +212,6 @@ export async function startBot() {
         return null;
     }
 
-    // server.js allaqachon ro'yxatdan o'tkazgan modellar shu yerda qayta olinadi.
     const User = mongoose.model('User');
     const Product = mongoose.model('Product');
     const Client = mongoose.model('Client');
@@ -258,15 +222,11 @@ export async function startBot() {
     const bot = new Telegraf(token, {
         telegram: {
             agent: telegramAgent,
-            // sendDocument kabi og'ir so'rovlar uchun standart timeout'ni kengaytiramiz
             webhookReply: false,
         },
-        handlerTimeout: 180000, // 3 daqiya — hisobot tayyorlash + yuborish uchun
+        handlerTimeout: 180000,
     });
 
-    // Oldingi ishga tushishlardan qolib ketgan vaqtinchalik hisobot
-    // fayllari bo'lsa (masalan process kutilmaganda qulab tushgan bo'lsa),
-    // diskni bekorga to'ldirmasligi uchun tozalab tashlaymiz.
     try {
         await ensureTmpDir();
         const leftovers = await fs.readdir(TMP_DIR);
@@ -278,7 +238,6 @@ export async function startBot() {
         console.error('[Bot] Vaqtinchalik papkani tozalashda xatolik:', err);
     }
 
-    // ---- /start: admin allaqachon bog'langanmi tekshiramiz ----
     bot.start(async (ctx) => {
         const existing = await User.findOne({ telegramId: ctx.from.id, role: 'admin', isActive: true });
         if (existing) {
@@ -299,11 +258,9 @@ export async function startBot() {
 
     bot.help((ctx) => ctx.reply("Boshlash uchun /start buyrug'ini yuboring."));
 
-    // ---- Kontakt (telefon raqam) qabul qilish ----
     bot.on('contact', async (ctx) => {
         const contact = ctx.message.contact;
 
-        // Faqat o'zining raqamini ulashishi shart (boshqa odamning kontaktini emas)
         if (contact.user_id && contact.user_id !== ctx.from.id) {
             return ctx.reply(
                 "Iltimos, faqat o'zingizning shaxsiy raqamingizni ulashing.",
@@ -331,7 +288,6 @@ export async function startBot() {
         return ctx.reply("Quyidagi menyudan kerakli bo'limni tanlang:", mainMenuKeyboard());
     });
 
-    // ---- Har bir callback tugmasidan oldin admin ekanini tekshiramiz ----
     async function requireAdmin(ctx, next) {
         const admin = await User.findOne({ telegramId: ctx.from.id, role: 'admin', isActive: true });
         if (!admin) {
@@ -347,9 +303,6 @@ export async function startBot() {
         await ctx.editMessageText("🏠 Bosh menyu:", mainMenuKeyboard());
     });
 
-    // -------------------------------------------------------------------
-    // STATISTIKA
-    // -------------------------------------------------------------------
     bot.action('menu:stats', requireAdmin, async (ctx) => {
         await ctx.answerCbQuery();
         const now = new Date();
@@ -385,9 +338,6 @@ export async function startBot() {
         await ctx.editMessageText(text, { parse_mode: 'HTML', ...backKeyboard() });
     });
 
-    // -------------------------------------------------------------------
-    // MAHSULOTLAR (ombordagi joriy holat)
-    // -------------------------------------------------------------------
     bot.action('menu:products', requireAdmin, async (ctx) => {
         await ctx.answerCbQuery();
         const count = await Product.countDocuments();
@@ -417,9 +367,6 @@ export async function startBot() {
         });
     });
 
-    // -------------------------------------------------------------------
-    // OYLIK SAVDO HISOBOTI (oy tanlanadi -> shu oydagi buyurtmalar)
-    // -------------------------------------------------------------------
     bot.action('menu:monthly', requireAdmin, async (ctx) => {
         await ctx.answerCbQuery();
         const now = new Date();
@@ -477,9 +424,6 @@ export async function startBot() {
         }
     });
 
-    // -------------------------------------------------------------------
-    // KASSA
-    // -------------------------------------------------------------------
     bot.action('menu:kassa', requireAdmin, async (ctx) => {
         await ctx.answerCbQuery();
         const kassa = await Kassa.findOne();
@@ -519,9 +463,6 @@ export async function startBot() {
         });
     });
 
-    // -------------------------------------------------------------------
-    // QARZDOR MIJOZLAR
-    // -------------------------------------------------------------------
     bot.action('menu:debtors', requireAdmin, async (ctx) => {
         await ctx.answerCbQuery();
         const count = await Client.countDocuments({ debt: { $gt: 0 } });
@@ -551,9 +492,6 @@ export async function startBot() {
         });
     });
 
-    // -------------------------------------------------------------------
-    // Boshqa har qanday matn
-    // -------------------------------------------------------------------
     bot.on('text', async (ctx, next) => {
         if (ctx.message.text.startsWith('/')) return next();
         const admin = await User.findOne({ telegramId: ctx.from.id, role: 'admin', isActive: true });
@@ -567,16 +505,9 @@ export async function startBot() {
         console.error(`[Bot] Xatolik (${ctx.updateType}):`, err);
     });
 
-    // Render qayta deploy/restart qilganda eski instance bilan
-    // "409 Conflict" bo'lmasligi uchun eski pending update'larni tashlab yuboramiz.
-    // Deploy paytida bir necha soniya eski va yangi instance parallel turishi
-    // mumkin (Render'ning zero-downtime deploy xususiyati) — shu daqiqada
-    // getUpdates 409 qaytarishi normal holat, shuning uchun qayta urinamiz.
     await launchWithRetry(bot);
     console.log('[Bot] Telegram bot ishga tushdi ✅');
 
-    // Xotira yoki kutilmagan xatoliklar sabab process jimgina o'lib qolmasligi
-    // uchun (Render logida ko'rinishi kerak):
     process.on('unhandledRejection', (reason) => {
         console.error('[Bot] Unhandled promise rejection:', reason);
     });

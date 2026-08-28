@@ -1,8 +1,9 @@
-import { Menu, X, User, LogOut } from "lucide-react";
+import { Menu, X, User, LogOut, UserPen } from "lucide-react";
 import { useContext, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import Cookies from "js-cookie";
 import { ContextData } from "../contextData/Context";
+import { ProfileModal } from "./ProfileModal";
 
 const links = [
     { name: "Bosh sahifa", path: "/" },
@@ -15,6 +16,7 @@ const links = [
 export const Header = () => {
     const [open, setOpen] = useState(false);
     const [profileOpen, setProfileOpen] = useState(false);
+    const [profileModalOpen, setProfileModalOpen] = useState(false);
 
     const navigate = useNavigate();
     const { user, setUser } = useContext(ContextData);
@@ -72,6 +74,13 @@ export const Header = () => {
                                         <p className="text-sm text-gray-500">{user?.phone || ""}</p>
                                     </div>
                                     <button
+                                        onClick={() => { setProfileOpen(false); setProfileModalOpen(true); }}
+                                        className="flex w-full items-center gap-3 px-4 py-3 text-sm font-medium text-blue-600 transition hover:bg-blue-50"
+                                    >
+                                        <UserPen size={16} />
+                                        Profilni yangilash
+                                    </button>
+                                    <button
                                         onClick={logout}
                                         className="flex w-full items-center gap-3 px-4 py-3 text-sm font-medium text-red-600 transition hover:bg-red-50"
                                     >
@@ -116,6 +125,13 @@ export const Header = () => {
                                 <p className="text-sm text-gray-500">{user?.phone || ""}</p>
                             </div>
                             <button
+                                onClick={() => { setOpen(false); setProfileModalOpen(true); }}
+                                className="mb-2 flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium text-white transition hover:bg-blue-700"
+                            >
+                                <UserPen size={16} />
+                                Profilni yangilash
+                            </button>
+                            <button
                                 onClick={logout}
                                 className="flex w-full items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-3 text-sm font-medium text-white transition hover:bg-red-700"
                             >
@@ -129,6 +145,12 @@ export const Header = () => {
 
             {/* Spacer */}
             <div className="h-16" />
+            <ProfileModal
+                open={profileModalOpen}
+                onClose={() => setProfileModalOpen(false)}
+                user={user}
+                onSaved={(updated) => setUser(updated)}
+            />
         </>
     );
 };
