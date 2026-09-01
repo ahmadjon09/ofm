@@ -577,7 +577,7 @@ export const Product = () => {
                           </td>
                           <td className="px-4 py-3 text-gray-600">{size.price}</td>
                           <td className="px-4 py-3 text-right font-medium text-emerald-700">
-                            {subtotal.toLocaleString()}
+                            {subtotal.toLocaleString()} $
                           </td>
                         </tr>
                       );

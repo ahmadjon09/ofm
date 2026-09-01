@@ -288,7 +288,7 @@ export const System = () => {
                             <InfoCard
                                 icon={Wallet}
                                 label="Kassa balansi"
-                                value={`${(info.kassaBalance || 0).toLocaleString()} so'm`}
+                                value={`${(info.kassaBalance || 0).toLocaleString()} $`}
                                 sub={`${server.platform || ''}`}
                                 color="amber"
                             />

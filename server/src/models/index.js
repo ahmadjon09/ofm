@@ -30,27 +30,38 @@ const kassaSchema = new mongoose.Schema(
 
 const Kassa = mongoose.model('Kassa', kassaSchema);
 
-async function getKassaDoc() {
-    let kassa = await Kassa.findOne();
+async function getKassaDoc(session = null) {
+    let query = Kassa.findOne();
+    if (session) query = query.session(session);
+    let kassa = await query;
     if (!kassa) {
-        kassa = await Kassa.create({ balance: 0 });
+        kassa = await Kassa.create([{ balance: 0 }], session ? { session } : undefined);
+        kassa = kassa[0];
     }
     return kassa;
 }
 
-async function kassaAddIncome(amount, { client = null, clientName = null, note = '', user = null } = {}) {
-    const kassa = await getKassaDoc();
+// Kassa amallariga session berish mumkin: buyurtma va uning pul harakati
+// bir transaction ichida birga saqlanadi.
+async function kassaAddIncome(amount, { client = null, clientName = null, note = '', user = null, session = null } = {}) {
+    const kassa = await getKassaDoc(session);
     kassa.balance = (kassa.balance || 0) + amount;
-    await kassa.save();
-    await KassaTransaction.create({ type: 'KIRIM', amount, reason: note, client, clientName, user, balanceAfter: kassa.balance });
+    await kassa.save(session ? { session } : undefined);
+    await KassaTransaction.create(
+        [{ type: 'KIRIM', amount, reason: note, client, clientName, user, balanceAfter: kassa.balance }],
+        session ? { session } : undefined
+    );
     return kassa;
 }
 
-async function kassaAddExpense(amount, { reason = '', user = null } = {}) {
-    const kassa = await getKassaDoc();
+async function kassaAddExpense(amount, { reason = '', client = null, clientName = null, user = null, session = null } = {}) {
+    const kassa = await getKassaDoc(session);
     kassa.balance = (kassa.balance || 0) - amount;
-    await kassa.save();
-    await KassaTransaction.create({ type: 'CHIQIM', amount, reason, user, balanceAfter: kassa.balance });
+    await kassa.save(session ? { session } : undefined);
+    await KassaTransaction.create(
+        [{ type: 'CHIQIM', amount, reason, client, clientName, user, balanceAfter: kassa.balance }],
+        session ? { session } : undefined
+    );
     return kassa;
 }
 
@@ -220,6 +231,10 @@ const orderSchema = new mongoose.Schema(
         totalBoxes: { type: Number, default: 0 },
         status: { type: String, enum: ['pending', 'completed', 'cancelled'], default: 'pending' },
         debtAdded: { type: Boolean, default: true },
+        // Qarzga yozilmagan buyurtma yaratilganda puli kassaga kiradi.
+        // Ushbu belgilar bekor qilish/qayta faollashtirishda ikki marta hisoblashni oldini oladi.
+        cashAdded: { type: Boolean, default: false },
+        cashReversed: { type: Boolean, default: false },
         stockRestored: { type: Boolean, default: false },
         createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     },

@@ -1192,7 +1192,7 @@ export const Orders = () => {
                           </span>
                         </td>
                         <td className="px-4 py-4 text-right font-medium text-gray-900">
-                          {formatNumber(order.orderTotal)}
+                          {formatNumber(order.orderTotal)} $
                         </td>
                         <td className="px-4 py-4">
                           <div className="flex justify-end gap-1">
