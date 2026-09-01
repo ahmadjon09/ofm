@@ -654,7 +654,7 @@ export const Clients = () => {
                                                         {new Date(payment.date).toLocaleDateString('uz-UZ')}
                                                     </td>
                                                     <td className="px-4 py-3 text-right font-medium text-emerald-700">
-                                                        {payment.amount.toLocaleString()}
+                                                        {payment.amount.toLocaleString()} $
                                                     </td>
                                                     <td className="px-4 py-3 text-gray-500">{payment.note || '-'}</td>
                                                     <td className="px-4 py-3 text-gray-500">{payment.user?.name || '-'}</td>
@@ -695,7 +695,7 @@ export const Clients = () => {
                                                         {new Date(order.createdAt).toLocaleDateString('uz-UZ')}
                                                     </td>
                                                     <td className="px-4 py-3 text-right font-medium text-gray-900">
-                                                        {order.orderTotal?.toLocaleString() || 0}
+                                                        {order.orderTotal?.toLocaleString() || 0} $
                                                     </td>
                                                     <td className="px-4 py-3">
                                                         <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${order.status === 'completed'
@@ -842,7 +842,7 @@ export const Clients = () => {
                                                 </td>
                                                 <td className="px-4 py-4 text-gray-600">{client.phone}</td>
                                                 <td className="px-4 py-4 text-right font-medium text-red-600">
-                                                    {client.debt?.toLocaleString() || 0}
+                                                    {client.debt?.toLocaleString() || 0} $
                                                 </td>
                                                 <td className="px-4 py-4">
                                                     <div className="flex justify-end gap-1">

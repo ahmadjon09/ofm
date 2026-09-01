@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { ApiError, sendSuccess, isValidObjectId, requireFields, parsePagination, buildMeta } from '../lib/helpers.js';
-import { Client, Order, Product } from '../models/index.js';
-import { clearDashboardCache } from '../lib/cache.js';
+import { Client, Order, Product, kassaAddIncome, kassaAddExpense } from '../models/index.js';
+import { clearDashboardCache, clearKassaCache } from '../lib/cache.js';
 
 // Buyurtma ichidagi mahsulotlarni omborga qaytarish
 async function restoreOrderStock(order, session) {
@@ -116,6 +116,7 @@ const orderController = {
                             items: orderItems,
                             createdBy: req.user._id,
                             debtAdded: addToDebt !== false,
+                            cashAdded: addToDebt === false,
                         },
                     ],
                     { session }
@@ -126,6 +127,17 @@ const orderController = {
                 }
                 client.orders.push(order._id);
                 await client.save({ session });
+
+                // Qarzga yozilmagan buyurtma darhol kassaga kirim qilinadi.
+                if (addToDebt === false) {
+                    await kassaAddIncome(order.orderTotal, {
+                        client: client._id,
+                        clientName: client.name,
+                        note: `Buyurtma uchun to'lov: ${client.name}`,
+                        user: req.user._id,
+                        session,
+                    });
+                }
 
                 createdOrder = order;
             });
@@ -207,6 +219,17 @@ const orderController = {
                             await client.save({ session });
                         }
                     }
+
+                    // Qarzga yozilmagan buyurtmaning kassaga kirgan puli qaytariladi.
+                    if (order.debtAdded === false && order.cashAdded && !order.cashReversed) {
+                        await kassaAddExpense(order.orderTotal, {
+                            reason: `Buyurtma bekor qilindi: ${order._id}`,
+                            client: order.client,
+                            user: req.user._id,
+                            session,
+                        });
+                        order.cashReversed = true;
+                    }
                 }
 
                 // Bekor qilish qaytarilmoqda: mahsulotlar qayta ombordan ayiriladi, qarz qaytadi
@@ -221,6 +244,16 @@ const orderController = {
                             await client.save({ session });
                         }
                     }
+
+                    if (order.debtAdded === false && order.cashAdded && order.cashReversed) {
+                        await kassaAddIncome(order.orderTotal, {
+                            client: order.client,
+                            note: `Buyurtma qayta faollashtirildi: ${order._id}`,
+                            user: req.user._id,
+                            session,
+                        });
+                        order.cashReversed = false;
+                    }
                 }
 
                 order.status = status;
@@ -232,6 +265,7 @@ const orderController = {
         }
 
         clearDashboardCache();
+        clearKassaCache();
         const msg = status === 'cancelled'
             ? "Buyurtma bekor qilindi. Mahsulotlar omborga qaytarildi."
             : "Buyurtma holati yangilandi.";
@@ -269,6 +303,16 @@ const orderController = {
                     }
                 }
 
+                // Faol, qarzga yozilmagan buyurtma o'chirilsa ham kassadagi kirim bekor qilinadi.
+                if (order.debtAdded === false && order.cashAdded && !order.cashReversed) {
+                    await kassaAddExpense(order.orderTotal, {
+                        reason: `Buyurtma bekor qilindi: ${order._id}`,
+                        client: order.client,
+                        user: req.user._id,
+                        session,
+                    });
+                }
+
                 await Order.deleteOne({ _id: order._id }).session(session);
             });
         } finally {
@@ -276,6 +320,7 @@ const orderController = {
         }
 
         clearDashboardCache();
+        clearKassaCache();
         return sendSuccess(res, 200, "Buyurtma butunlay o'chirildi. Mahsulotlar omborga qaytarildi.");
     },
 };

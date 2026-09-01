@@ -1214,7 +1214,7 @@ export const Kassa = () => {
                                                         </span>
                                                     </td>
                                                     <td className={`px-6 py-4 text-sm font-bold text-right ${isIncome ? 'text-green-600' : 'text-red-600'}`}>
-                                                        {isIncome ? '+' : '-'}{Number(tx.amount).toLocaleString()}
+                                                        {isIncome ? '+' : '-'}{Number(tx.amount).toLocaleString()} $
                                                     </td>
                                                     <td className="px-6 py-4 text-sm text-gray-600 max-w-xs truncate" title={tx.reason || tx.source}>
                                                         {tx.reason || tx.source || '-'}
@@ -1544,7 +1544,7 @@ export const Kassa = () => {
                                                 <tr key={idx} className="hover:bg-gray-50 transition">
                                                     <td className="px-4 py-3 text-gray-800 font-medium">{item.note}</td>
                                                     <td className="px-4 py-3 text-right font-bold text-red-600">
-                                                        {item.total.toLocaleString()}
+                                                        {item.total.toLocaleString()} $
                                                     </td>
                                                 </tr>
                                             ))}
@@ -1553,7 +1553,7 @@ export const Kassa = () => {
                                             <tr>
                                                 <td className="px-4 py-3 font-bold text-gray-800">Jami</td>
                                                 <td className="px-4 py-3 text-right font-bold text-red-700">
-                                                    {groupData.reduce((sum, item) => sum + item.total, 0).toLocaleString()}
+                                                    {groupData.reduce((sum, item) => sum + item.total, 0).toLocaleString()} $
                                                 </td>
                                             </tr>
                                         </tfoot>
