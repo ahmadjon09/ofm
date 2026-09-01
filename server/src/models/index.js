@@ -219,6 +219,8 @@ const orderSchema = new mongoose.Schema(
         totalKg: { type: Number, default: 0 },
         totalBoxes: { type: Number, default: 0 },
         status: { type: String, enum: ['pending', 'completed', 'cancelled'], default: 'pending' },
+        debtAdded: { type: Boolean, default: true },
+        stockRestored: { type: Boolean, default: false },
         createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     },
     { timestamps: true, versionKey: 'version' }

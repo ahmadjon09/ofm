@@ -9,6 +9,7 @@ import orderController from '../controllers/order.controller.js';
 import kassaController from '../controllers/kassa.controller.js';
 import dashboardController from '../controllers/dashboard.controller.js';
 import reportController from '../controllers/report.controller.js';
+import systemController from '../controllers/system.controller.js';
 import { sendSuccess } from '../lib/helpers.js';
 
 const router = Router();
@@ -68,5 +69,8 @@ router.get('/reports/stock', authenticate, authorize('admin', 'manager'), report
 router.get('/reports/debts', authenticate, authorize('admin', 'manager'), reportController.debts);
 router.get('/reports/client/:clientId', authenticate, authorize('admin', 'manager'), reportController.clientLedger);
 router.get('/reports/summary', authenticate, authorize('admin', 'manager'), reportController.summary);
+
+router.get('/system/info', authenticate, authorize('admin'), adminLimiter, systemController.info);
+router.delete('/system/modules/:key', authenticate, authorize('admin'), adminLimiter, systemController.clearModule);
 
 export default router;

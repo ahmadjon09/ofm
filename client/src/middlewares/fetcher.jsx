@@ -1,8 +1,8 @@
 import axios from 'axios'
 import Cookies from 'js-cookie'
 
-const BASE_URL = `https://api.ofmm.uz/api/v1`
-// export const BASE_URL = `http://localhost:5000/api/v1`
+const BASE_URL = import.meta.env.VITE_API_BASE || `https://api.ofmm.uz/api/v2`
+// Lokal ishlatish uchun: .env faylga VITE_API_BASE=http://localhost:5000/api/v2 yozing
 
 const token = Cookies.get('user_token')
 const instance = axios.create({

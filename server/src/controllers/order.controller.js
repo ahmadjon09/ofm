@@ -2,6 +2,50 @@ import mongoose from 'mongoose';
 import { ApiError, sendSuccess, isValidObjectId, requireFields, parsePagination, buildMeta } from '../lib/helpers.js';
 import { Client, Order, Product } from '../models/index.js';
 import { clearDashboardCache } from '../lib/cache.js';
+
+// Buyurtma ichidagi mahsulotlarni omborga qaytarish
+async function restoreOrderStock(order, session) {
+    for (const item of order.items) {
+        const product = await Product.findById(item.product).session(session);
+        if (!product) continue; // Mahsulot o'chirilgan bo'lsa, o'tkazib yuboramiz
+
+        const sizeEntry = product.sizes.find((s) => s.size === Number(item.size));
+        if (sizeEntry) {
+            sizeEntry.boxes += item.quantityBoxes;
+        } else {
+            // Razmer o'chirilgan bo'lsa, uni qayta tiklaymiz
+            product.sizes.push({
+                size: item.size,
+                price: item.pricePerKg,
+                boxes: item.quantityBoxes,
+                box_kg: item.boxKg,
+            });
+        }
+        await product.save({ session });
+    }
+}
+
+// Buyurtma ichidagi mahsulotlarni ombordan qayta ayirish (bekor qilish qaytarilganda)
+async function deductOrderStock(order, session) {
+    for (const item of order.items) {
+        const product = await Product.findById(item.product).session(session);
+        if (!product) {
+            throw new ApiError(400, `Mahsulot topilmadi: ${item.productName}. Buyurtmani qayta faollashtirib bo'lmaydi.`);
+        }
+
+        const sizeEntry = product.sizes.find((s) => s.size === Number(item.size));
+        if (!sizeEntry || sizeEntry.boxes < item.quantityBoxes) {
+            throw new ApiError(
+                400,
+                `Stok yetarli emas: ${item.productName} (${item.size}). Mavjud qutilar: ${sizeEntry ? sizeEntry.boxes : 0}.`
+            );
+        }
+
+        sizeEntry.boxes -= item.quantityBoxes;
+        await product.save({ session });
+    }
+}
+
 const orderController = {
     async create(req, res) {
         const { clientId, items, addToDebt } = req.body;
@@ -71,6 +115,7 @@ const orderController = {
                             client: client._id,
                             items: orderItems,
                             createdBy: req.user._id,
+                            debtAdded: addToDebt !== false,
                         },
                     ],
                     { session }
@@ -139,27 +184,99 @@ const orderController = {
             throw new ApiError(400, "Noto'g'ri holat qiymati.");
         }
 
-        const order = await Order.findById(id);
-        if (!order) throw new ApiError(404, "Buyurtma topilmadi.");
+        const session = await mongoose.startSession();
+        let updatedOrder;
 
-        order.status = status;
-        await order.save();
+        try {
+            await session.withTransaction(async () => {
+                const order = await Order.findById(id).session(session);
+                if (!order) throw new ApiError(404, "Buyurtma topilmadi.");
+
+                const wasCancelled = order.status === 'cancelled';
+                const willBeCancelled = status === 'cancelled';
+
+                // Bekor qilinmoqda: mahsulotlar omborga qaytadi, qarz kamayadi
+                if (willBeCancelled && !wasCancelled && !order.stockRestored) {
+                    await restoreOrderStock(order, session);
+                    order.stockRestored = true;
+
+                    if (order.debtAdded !== false) {
+                        const client = await Client.findById(order.client).session(session);
+                        if (client) {
+                            client.debt = (client.debt || 0) - order.orderTotal;
+                            await client.save({ session });
+                        }
+                    }
+                }
+
+                // Bekor qilish qaytarilmoqda: mahsulotlar qayta ombordan ayiriladi, qarz qaytadi
+                if (wasCancelled && !willBeCancelled && order.stockRestored) {
+                    await deductOrderStock(order, session);
+                    order.stockRestored = false;
+
+                    if (order.debtAdded !== false) {
+                        const client = await Client.findById(order.client).session(session);
+                        if (client) {
+                            client.debt = (client.debt || 0) + order.orderTotal;
+                            await client.save({ session });
+                        }
+                    }
+                }
+
+                order.status = status;
+                await order.save({ session });
+                updatedOrder = order;
+            });
+        } finally {
+            session.endSession();
+        }
 
         clearDashboardCache();
-        return sendSuccess(res, 200, "Buyurtma holati yangilandi.", { order });
+        const msg = status === 'cancelled'
+            ? "Buyurtma bekor qilindi. Mahsulotlar omborga qaytarildi."
+            : "Buyurtma holati yangilandi.";
+        return sendSuccess(res, 200, msg, { order: updatedOrder });
     },
 
     async remove(req, res) {
         const { id } = req.params;
         if (!isValidObjectId(id)) throw new ApiError(400, "Noto'g'ri ID format.");
 
-        const order = await Order.findById(id);
-        if (!order) throw new ApiError(404, "Buyurtma topilmadi.");
+        const session = await mongoose.startSession();
 
-        await Order.findByIdAndDelete(id);
+        try {
+            await session.withTransaction(async () => {
+                const order = await Order.findById(id).session(session);
+                if (!order) throw new ApiError(404, "Buyurtma topilmadi.");
+
+                // Agar buyurtma bekor qilinmagan bo'lsa (stok hali qaytarilmagan) — omborga qaytaramiz
+                if (!order.stockRestored && order.status !== 'cancelled') {
+                    await restoreOrderStock(order, session);
+
+                    if (order.debtAdded !== false) {
+                        const client = await Client.findById(order.client).session(session);
+                        if (client) {
+                            client.debt = (client.debt || 0) - order.orderTotal;
+                            client.orders = (client.orders || []).filter((o) => String(o) !== String(order._id));
+                            await client.save({ session });
+                        }
+                    }
+                } else {
+                    const client = await Client.findById(order.client).session(session);
+                    if (client) {
+                        client.orders = (client.orders || []).filter((o) => String(o) !== String(order._id));
+                        await client.save({ session });
+                    }
+                }
+
+                await Order.deleteOne({ _id: order._id }).session(session);
+            });
+        } finally {
+            session.endSession();
+        }
 
         clearDashboardCache();
-        return sendSuccess(res, 200, "Buyurtma butunlay o'chirildi.");
+        return sendSuccess(res, 200, "Buyurtma butunlay o'chirildi. Mahsulotlar omborga qaytarildi.");
     },
 };
 

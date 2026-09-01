@@ -34,7 +34,7 @@ async function startServer() {
 
     server = app.listen(config.port, () => {
         console.log(`${colors.green}[Server] http://localhost:${config.port} manzilida ishga tushdi.${colors.reset}`);
-        console.log(`${colors.cyan}[API] Asosiy manzil: /api/v1${colors.reset}`);
+        console.log(`${colors.cyan}[API] Asosiy manzil: /api/v2 (eski /api/v1 ham ishlaydi)${colors.reset}`);
     });
 }
 
