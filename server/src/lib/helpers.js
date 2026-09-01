@@ -11,14 +11,19 @@ class ApiError extends Error {
     }
 }
 
+const API_VERSION = '2';
+const API_VERSION_MSG = 'API v2';
+
 function sendSuccess(res, statusCode, message, data = {}, meta = null) {
-    const payload = { success: true, message, data };
+    const payload = { success: true, version: API_VERSION, apiMessage: API_VERSION_MSG, message, data };
     if (meta) payload.meta = meta;
+    res.setHeader('X-Api-Version', API_VERSION);
     return res.status(statusCode).json(payload);
 }
 
 function sendError(res, statusCode, message, error = null) {
-    return res.status(statusCode).json({ success: false, message, error });
+    res.setHeader('X-Api-Version', API_VERSION);
+    return res.status(statusCode).json({ success: false, version: API_VERSION, apiMessage: API_VERSION_MSG, message, error });
 }
 
 function isValidObjectId(id) {
@@ -52,6 +57,8 @@ function buildMeta(total, page, limit) {
 }
 
 export {
+    API_VERSION,
+    API_VERSION_MSG,
     ApiError,
     sendSuccess,
     sendError,

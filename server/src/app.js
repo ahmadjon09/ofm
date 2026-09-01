@@ -57,6 +57,9 @@ if (config.nodeEnv !== 'test') {
 app.use('/api/v1', generalLimiter);
 app.use('/api/v1', router);
 
+app.use('/api/v2', generalLimiter);
+app.use('/api/v2', router);
+
 app.use((req, res) => {
     return sendError(res, 404, "So'ralgan manzil topilmadi.");
 });

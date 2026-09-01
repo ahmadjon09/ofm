@@ -13,6 +13,7 @@ import { Dashboard } from './pages/Dashboard'
 import { Clients } from './pages/Clients'
 import { Orders } from './pages/Orders'
 import { Kassa } from './pages/Kassa'
+import { System } from './pages/System'
 
 export default function App() {
   const { setUser, user } = useContext(ContextData)
@@ -61,7 +62,7 @@ export default function App() {
   if (!token) return <AuthModals />
 
   if (isLoading) return <Loading />
-  // const isAdmin = user.role === 'admin'
+  const isAdmin = user?.role === 'admin'
 
   const routes = [
     { index: true, element: <Dashboard /> },
@@ -74,6 +75,7 @@ export default function App() {
     { path: 'orders/:id', element: <Orders /> },
     { path: 'kassa', element: <Kassa /> },
     { path: 'kassa/:id', element: <Kassa /> },
+    isAdmin && { path: 'system', element: <System /> },
     { path: '*', element: <Err /> }
   ].filter(Boolean)
 

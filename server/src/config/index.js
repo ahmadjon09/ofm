@@ -20,6 +20,7 @@ const config = {
     nodeEnv: process.env.NODE_ENV || 'development',
     corsOrigin: process.env.CORS_ORIGIN || '*',
     dashboardCacheTtl: Number(process.env.DASHBOARD_CACHE_TTL || 30),
+    dbQuotaMb: Number(process.env.DB_QUOTA_MB || 512),
 };
 
 const colors = {

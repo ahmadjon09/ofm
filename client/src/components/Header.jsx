@@ -12,6 +12,7 @@ const links = [
     { name: "Buyurtmalar", path: "/orders" },
     { name: "Kassa", path: "/kassa" },
     { name: "Xodimlar", path: "/users" },
+    { name: "Tizim", path: "/system", adminOnly: true },
 ];
 export const Header = () => {
     const [open, setOpen] = useState(false);
@@ -20,6 +21,8 @@ export const Header = () => {
 
     const navigate = useNavigate();
     const { user, setUser } = useContext(ContextData);
+
+    const visibleLinks = links.filter((link) => !link.adminOnly || user?.role === "admin");
 
     const logout = () => {
         Cookies.remove("user_token");
@@ -35,7 +38,7 @@ export const Header = () => {
                         OFM
                     </Link>
                     <nav className="hidden items-center gap-1 md:flex">
-                        {links.map((link) => (
+                        {visibleLinks.map((link) => (
                             <NavLink
                                 key={link.path}
                                 to={link.path}
@@ -104,7 +107,7 @@ export const Header = () => {
                 {/* Mobile menu */}
                 {open && (
                     <nav className="border-t border-gray-200 bg-white md:hidden">
-                        {links.map((link) => (
+                        {visibleLinks.map((link) => (
                             <NavLink
                                 key={link.path}
                                 to={link.path}
