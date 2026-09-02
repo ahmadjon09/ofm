@@ -8,6 +8,13 @@ printBanner();
 
 const keepServerAlive = () => {
     const pingInterval = 12 * 60 * 1000;
+    const renderUrl = process.env.RENDER_URL?.replace(/\/$/, '');
+
+    // Lokal muhitda yoki RENDER_URL berilmaganida ortiqcha so'rov yubormaymiz.
+    if (!renderUrl) {
+        console.log('ℹ️ Keep-alive o\'chirilgan: RENDER_URL sozlanmagan.');
+        return;
+    }
 
     const checkAndPing = () => {
         const now = new Date();
@@ -15,16 +22,17 @@ const keepServerAlive = () => {
 
         if (hourTashkent >= 8 || hourTashkent < 3) {
             axios
-                .get(process.env.RENDER_URL)
-                .then(() => console.log('🔄 Server active (Tashkent time)'))
-                .catch(() => console.log('⚠️ Ping failed'));
+                .get(`${renderUrl}/health`, { timeout: 10000 })
+                .then(() => console.log('🔄 Server active (/health, Tashkent time)'))
+                .catch((error) => console.log(`⚠️ Keep-alive ping failed: ${error.message}`));
         } else {
             console.log('💤 Keep-alive uyqu rejimida (Tashkent time)');
         }
     };
 
     checkAndPing();
-    setInterval(checkAndPing, pingInterval);
+    const timer = setInterval(checkAndPing, pingInterval);
+    timer.unref();
 };
 
 let server;
@@ -35,6 +43,7 @@ async function startServer() {
     server = app.listen(config.port, () => {
         console.log(`${colors.green}[Server] http://localhost:${config.port} manzilida ishga tushdi.${colors.reset}`);
         console.log(`${colors.cyan}[API] Asosiy manzil: /api/v2 (eski /api/v1 ham ishlaydi)${colors.reset}`);
+        keepServerAlive();
     });
 }
 
@@ -76,6 +85,5 @@ process.on('uncaughtException', (err) => {
 });
 
 startServer();
-keepServerAlive();
 
 export default app;
