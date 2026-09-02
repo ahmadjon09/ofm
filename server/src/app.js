@@ -9,6 +9,7 @@ import morgan from 'morgan';
 import 'express-async-errors';
 import { v4 as uuidv4 } from 'uuid';
 import { config, colors } from './config/index.js';
+import { mongoose } from './lib/db.js';
 import { generalLimiter } from './middleware/auth.js';
 import router from './routes/index.js';
 import { sendError } from './lib/helpers.js';
@@ -16,6 +17,18 @@ import { sendError } from './lib/helpers.js';
 const app = express();
 
 app.set('trust proxy', 1);
+
+// Render va boshqa monitoring servislar uchun autentifikatsiyasiz health-check.
+// API versiyalari ostidagi /api/v1/health va /api/v2/health ham saqlanadi.
+app.get('/health', (req, res) => {
+    const dbState = mongoose.connection.readyState === 1 ? 'ulangan' : 'ulanmagan';
+    return res.status(200).json({
+        status: 'ok',
+        database: dbState,
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+    });
+});
 
 app.use(helmet());
 
