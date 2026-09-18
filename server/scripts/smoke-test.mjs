@@ -122,6 +122,40 @@ assert(r.status === 200 && r.json.data.deletedCount === 1, `orders tozalandi (${
 r = await call('DELETE', '/system/modules/users', { confirm: 'users' });
 assert(r.status === 403, `users modulini o'chirish taqiqlangan (${r.status})`);
 
+// --- 11. Kassa: oylik tushum/chiqim va chiqimlar guruhlari (server hisobida)
+console.log('6) Kassa statistikasi (oylik tushum/chiqim, guruhlar)');
+r = await call('POST', '/kassa/income', { amount: 1000, source: 'Smoke kirim' });
+assert(r.status === 200 && r.json.data.balance === 1000, `kirim yozildi (balans ${r.json.data?.balance})`);
+r = await call('POST', '/kassa/expense', { amount: 250.5, reason: 'Smoke xarajat' });
+assert(r.status === 200 && r.json.data.balance === 749.5, `chiqim yozildi (balans ${r.json.data?.balance})`);
+r = await call('POST', '/kassa/expense', { amount: 49.5, reason: '  smoke   XARAJAT ' });
+assert(r.status === 200, `bir xil izohning boshqa yozilishi qabul qilindi (${r.status})`);
+
+// Joriy oy kaliti serverdan olinadi (ish mintaqasi bo'yicha hisoblanadi)
+const kassaInfo = await call('GET', '/kassa');
+const monthKey = kassaInfo.json.data.currentMonth;
+assert(!!monthKey && /^\d{4}-\d{2}$/.test(monthKey), `server joriy oyni qaytaradi (${monthKey})`);
+r = await call('GET', `/kassa/summary?month=${monthKey}`);
+assert(r.status === 200, `summary 200 (${r.status})`);
+assert(r.json.data.income === 1000, `oylik kirim 1000 (${r.json.data?.income})`);
+assert(r.json.data.expense === 300, `oylik chiqim 300 (${r.json.data?.expense})`);
+assert(r.json.data.net === 700, `sof oqim 700 (${r.json.data?.net})`);
+assert(r.json.data.expenseGroups.length === 1, `guruhlar birlashtirildi: 1 ta (${r.json.data?.expenseGroups?.length})`);
+assert(r.json.data.expenseGroups[0].total === 300, `guruh yig'indisi 300 (${r.json.data?.expenseGroups?.[0]?.total})`);
+assert(r.json.data.expenseGroups[0].count === 2, `guruhda 2 ta yozuv (${r.json.data?.expenseGroups?.[0]?.count})`);
+
+r = await call('GET', `/kassa/groups?month=${monthKey}`);
+assert(r.status === 200 && r.json.data.total === 300, `groups yig'indisi 300 (${r.json.data?.total})`);
+assert(r.json.data.count === 2, `groups yozuvlar soni 2 (${r.json.data?.count})`);
+
+r = await call('GET', '/kassa/history?search=smoke&limit=1000');
+assert(r.status === 200 && r.json.meta.total === 2, `qidiruv butun tarix bo'yicha 2 ta (${r.json.meta?.total})`);
+assert(r.json.data.summary.expense === 300, `qidiruv bo'yicha to'liq yig'indi 300 (${r.json.data?.summary?.expense})`);
+assert(r.json.data.history.length <= 100, `sahifa hajmi serverda cheklanadi (${r.json.data?.history?.length})`);
+
+r = await call('GET', '/kassa/summary?month=13');
+assert(r.status === 400, `noto'g'ri oy -> 400 (${r.status})`);
+
 server.close();
 await mongoose.disconnect();
 await replset.stop();

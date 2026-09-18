@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcrypt';
+import { roundMoney, normalizeReason } from '../lib/kassaStats.js';
+
 const kassaTransactionSchema = new mongoose.Schema(
     {
         type: { type: String, required: true, enum: ['KIRIM', 'CHIQIM'] },
@@ -40,17 +42,35 @@ async function getKassaDoc() {
 
 async function kassaAddIncome(amount, { client = null, clientName = null, note = '', user = null } = {}) {
     const kassa = await getKassaDoc();
-    kassa.balance = (kassa.balance || 0) + amount;
+    // Pul har doim 2 xonaga yaxlitlanadi — aks holda float qo'shish xatolari
+    // (0.1 + 0.2) balansga yig'ilib ketadi.
+    const value = roundMoney(amount);
+    kassa.balance = roundMoney((kassa.balance || 0) + value);
     await kassa.save();
-    await KassaTransaction.create({ type: 'KIRIM', amount, reason: note, client, clientName, user, balanceAfter: kassa.balance });
+    await KassaTransaction.create({
+        type: 'KIRIM',
+        amount: value,
+        reason: normalizeReason(note),
+        client,
+        clientName,
+        user,
+        balanceAfter: kassa.balance,
+    });
     return kassa;
 }
 
 async function kassaAddExpense(amount, { reason = '', user = null } = {}) {
     const kassa = await getKassaDoc();
-    kassa.balance = (kassa.balance || 0) - amount;
+    const value = roundMoney(amount);
+    kassa.balance = roundMoney((kassa.balance || 0) - value);
     await kassa.save();
-    await KassaTransaction.create({ type: 'CHIQIM', amount, reason, user, balanceAfter: kassa.balance });
+    await KassaTransaction.create({
+        type: 'CHIQIM',
+        amount: value,
+        reason: normalizeReason(reason),
+        user,
+        balanceAfter: kassa.balance,
+    });
     return kassa;
 }
 
