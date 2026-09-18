@@ -56,6 +56,8 @@ router.delete('/orders/:id', authenticate, authorize('admin'), orderController.r
 
 router.get('/kassa', authenticate, authorize('admin', 'manager'), kassaController.get);
 router.get('/kassa/history', authenticate, authorize('admin', 'manager'), kassaController.history);
+router.get('/kassa/summary', authenticate, authorize('admin', 'manager'), kassaController.summary);
+router.get('/kassa/groups', authenticate, authorize('admin', 'manager'), kassaController.groups);
 router.get('/kassa/suggestions', authenticate, authorize('admin', 'manager'), kassaController.expenseSuggestions);
 router.delete('/kassa/del/:id', authenticate, authorize('admin', 'manager'), kassaController.deleteHistory);
 router.post('/kassa/expense', authenticate, authorize('admin', 'manager'), kassaController.expense);

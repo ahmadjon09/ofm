@@ -10,6 +10,22 @@ function validateEnv() {
     }
 }
 
+/**
+ * Ish vaqti mintaqasi (business timezone) — oy/kun chegaralari shu bo'yicha
+ * hisoblanadi. Standart: UTC+5 (Toshkent). Kuniga 1440 daqiqadan oshiq bo'lmaydi.
+ */
+function resolveTimezoneOffsetMinutes() {
+    const raw = process.env.TIMEZONE_OFFSET_MINUTES;
+    const parsed = Number(raw);
+    if (raw === undefined || raw === null || raw === '' || !Number.isFinite(parsed)) return 300;
+    const rounded = Math.round(parsed);
+    if (Math.abs(rounded) > 840) {
+        console.warn(`\x1b[33m[OGOHLANTIRISH] TIMEZONE_OFFSET_MINUTES=${raw} noto'g'ri, 300 (UTC+5) ishlatiladi.\x1b[0m`);
+        return 300;
+    }
+    return rounded;
+}
+
 const config = {
     port: process.env.PORT || 5000,
     mongoUri: process.env.MONGO_URI,
@@ -21,6 +37,7 @@ const config = {
     corsOrigin: process.env.CORS_ORIGIN || '*',
     dashboardCacheTtl: Number(process.env.DASHBOARD_CACHE_TTL || 30),
     dbQuotaMb: Number(process.env.DB_QUOTA_MB || 512),
+    timezoneOffsetMinutes: resolveTimezoneOffsetMinutes(),
 };
 
 const colors = {

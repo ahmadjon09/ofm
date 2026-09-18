@@ -6,7 +6,10 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "test": "node scripts/kassa-stats-test.mjs && node scripts/kassa-api-test.mjs && node scripts/kassa-http-test.mjs",
+    "test:kassa": "node scripts/kassa-stats-test.mjs && node scripts/kassa-api-test.mjs && node scripts/kassa-http-test.mjs",
+    "smoke": "node scripts/smoke-test.mjs"
   },
   "engines": {
     "node": ">=18.0.0"

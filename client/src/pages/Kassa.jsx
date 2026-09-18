@@ -24,9 +24,24 @@ import {
 
 const KASSA_URL = '/kassa';
 const HISTORY_URL = '/kassa/history';
+const SUMMARY_URL = '/kassa/summary';
+const GROUPS_URL = '/kassa/groups';
 const EXPENSE_URL = '/kassa/expense';
 const INCOME_URL = '/kassa/income';
 const SUGGESTIONS_URL = '/kassa/suggestions';
+
+const MONTH_NAMES_UZ = [
+    'Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
+    'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr',
+];
+
+// Oy kalitini ('2026-09') o'qiladigan nomga aylantiradi. Ko'rsatish uchun
+// ishlatiladi — barcha hisob-kitoblar serverda.
+const monthKeyToLabel = (monthKey) => {
+    const match = /^(\d{4})-(\d{2})$/.exec(String(monthKey || ''));
+    if (!match) return '-';
+    return `${MONTH_NAMES_UZ[Number(match[2]) - 1]} ${match[1]}`;
+};
 
 const Toast = ({ toast, onClose }) => {
     if (!toast) return null;
@@ -256,10 +271,15 @@ const PRINT_BASE_STYLE = `
     }
 `;
 
-const buildKassaHistoryPrintHtml = ({ transactions, typeFilter, fromDate, toDate, balance }) => {
+const buildKassaHistoryPrintHtml = ({ transactions, typeFilter, fromDate, toDate, balance, totals }) => {
     const list = transactions || [];
-    const totalIncome = list.filter((t) => t.type === 'KIRIM').reduce((s, t) => s + Number(t.amount || 0), 0);
-    const totalExpense = list.filter((t) => t.type === 'CHIQIM').reduce((s, t) => s + Number(t.amount || 0), 0);
+    // Yig'indilar serverdan keladi (sahifalashdan qat'i nazar to'liq).
+    // Server javobi bo'lmasa — zaxira sifatida ko'rinib turgan qatorlardan hisoblaymiz.
+    const totalIncome = totals ? Number(totals.income || 0)
+        : list.filter((t) => t.type === 'KIRIM').reduce((s, t) => s + Number(t.amount || 0), 0);
+    const totalExpense = totals ? Number(totals.expense || 0)
+        : list.filter((t) => t.type === 'CHIQIM').reduce((s, t) => s + Number(t.amount || 0), 0);
+    const totalCount = totals ? Number(totals.count || 0) : list.length;
 
     const periodLabel = (() => {
         if (!fromDate && !toDate) return 'Barcha davr';
@@ -311,7 +331,7 @@ const buildKassaHistoryPrintHtml = ({ transactions, typeFilter, fromDate, toDate
   </div>
 
   <div class="summary">
-    <span>Operatsiyalar soni: <b>${list.length}</b></span>
+    <span>Operatsiyalar soni: <b>${totalCount}</b></span>
     <span>Jami kirim: <span class="pos">+${formatMoneyPrint(totalIncome)} $</span></span>
     <span>Jami chiqim: <span class="neg">-${formatMoneyPrint(totalExpense)} $</span></span>
     <span>Joriy balans: <b>${formatMoneyPrint(balance)} $</b></span>
@@ -348,22 +368,23 @@ const buildKassaHistoryPrintHtml = ({ transactions, typeFilter, fromDate, toDate
 </html>`;
 };
 
-const buildKassaGroupPrintHtml = ({ selectedMonth, groupData }) => {
+const buildKassaGroupPrintHtml = ({ selectedMonth, groupData, totals }) => {
     const list = groupData || [];
-    const [year, monthNum] = (selectedMonth || '').split('-').map(Number);
-    const monthLabel = year && monthNum
-        ? new Date(year, monthNum - 1, 1).toLocaleDateString('uz-UZ', { month: 'long', year: 'numeric' })
-        : '-';
+    // Oy nomi va yig'indilar serverdan (server javobi bo'lmasa — zaxira hisob).
+    const monthLabel = totals?.monthLabel || monthKeyToLabel(selectedMonth);
 
-    const totalSum = list.reduce((s, i) => s + Number(i.total || 0), 0);
-    const totalCount = list.reduce((s, i) => s + Number(i.count || 0), 0);
+    const totalSum = totals ? Number(totals.total || 0) : list.reduce((s, i) => s + Number(i.total || 0), 0);
+    const totalCount = totals ? Number(totals.count || 0) : list.reduce((s, i) => s + Number(i.count || 0), 0);
+    const groupCount = totals ? Number(totals.groupCount ?? list.length) : list.length;
 
     const rowsHtml = list
         .map((item, idx) => `
       <tr>
         <td class="c">${idx + 1}</td>
-        <td>${escapeHtml(item.note)}</td>
+        <td>${escapeHtml(item.label || item.note)}</td>
+        <td class="c">${Number(item.count || 0)}</td>
         <td class="r b neg">${formatMoneyPrint(item.total)}</td>
+        <td class="c">${formatMoneyPrint(item.percent || 0)}%</td>
       </tr>`)
         .join('');
 
@@ -388,7 +409,7 @@ const buildKassaGroupPrintHtml = ({ selectedMonth, groupData }) => {
   </div>
 
   <div class="summary">
-    <span>Guruhlar soni: <b>${list.length}</b></span>
+    <span>Guruhlar soni: <b>${groupCount}</b></span>
     <span>Jami chiqimlar soni: <b>${totalCount}</b></span>
     <span>Jami summa: <span class="neg">${formatMoneyPrint(totalSum)} $</span></span>
   </div>
@@ -397,8 +418,10 @@ const buildKassaGroupPrintHtml = ({ selectedMonth, groupData }) => {
     <thead>
       <tr>
         <th style="width:6%">№</th>
-        <th style="width:40%">Sabab / Izoh</th>
-        <th style="width:18%">Jami summa ($)</th>
+        <th style="width:38%">Sabab / Izoh</th>
+        <th style="width:10%">Soni</th>
+        <th style="width:20%">Jami summa ($)</th>
+        <th style="width:12%">Ulush</th>
       </tr>
     </thead>
     <tbody>
@@ -406,9 +429,10 @@ const buildKassaGroupPrintHtml = ({ selectedMonth, groupData }) => {
     </tbody>
     <tfoot>
       <tr>
-        <td class="r">Jami:</td>
-        <td></td>
+        <td colspan="2" class="r">Jami:</td>
+        <td class="c">${totalCount}</td>
         <td class="r neg">${formatMoneyPrint(totalSum)}</td>
+        <td class="c">100%</td>
       </tr>
     </tfoot>
   </table>
@@ -424,11 +448,18 @@ export const Kassa = () => {
     const transactionId = params.id;
 
     const [page, setPage] = useState(1);
-    const limit = 300;
+    // Server bir sahifada ko'pi bilan 100 ta yozuv qaytaradi (parsePagination).
+    const limit = 100;
     const [typeFilter, setTypeFilter] = useState('');
     const [fromDate, setFromDate] = useState('');
     const [toDate, setToDate] = useState('');
     const [searchTerm, setSearchTerm] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+
+    useEffect(() => {
+        const timer = setTimeout(() => setDebouncedSearch(searchTerm), 350);
+        return () => clearTimeout(timer);
+    }, [searchTerm]);
 
     const [incomeModalOpen, setIncomeModalOpen] = useState(false);
     const [incomeForm, setIncomeForm] = useState({ amount: '', source: '' });
@@ -443,11 +474,13 @@ export const Kassa = () => {
     const [suggestionOpen, setSuggestionOpen] = useState(false);
 
     const [groupModalOpen, setGroupModalOpen] = useState(false);
+    // Oy kaliti serverdan olinadi (server javobigacha — mahalliy vaqt bo'yicha zaxira).
     const [selectedMonth, setSelectedMonth] = useState(() => {
         const now = new Date();
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     });
     const [groupData, setGroupData] = useState([]);
+    const [groupMeta, setGroupMeta] = useState(null);
     const [groupLoading, setGroupLoading] = useState(false);
     const [groupError, setGroupError] = useState(null);
 
@@ -481,14 +514,29 @@ export const Kassa = () => {
         { revalidateOnFocus: true }
     );
     const balance = balanceData?.data?.balance ?? 0;
+    const serverCurrentMonth = balanceData?.data?.currentMonth || null;
+
+    // Oylik tushum/chiqim — to'liq serverdan (bugungi ko'rinib turgan sahifadan emas).
+    const {
+        data: summaryData,
+        error: summaryError,
+        isLoading: summaryLoading,
+        mutate: mutateSummary,
+    } = useSWR(
+        SUMMARY_URL,
+        (url) => api.get(url).then((res) => res.data),
+        { revalidateOnFocus: true }
+    );
+    const summary = summaryData?.data || null;
 
     const buildQuery = useCallback(() => {
         const params = new URLSearchParams({ page, limit });
         if (typeFilter) params.append('type', typeFilter);
-        if (fromDate) params.append('from', new Date(fromDate).toISOString());
-        if (toDate) params.append('to', new Date(toDate).toISOString());
+        if (fromDate) params.append('from', fromDate);
+        if (toDate) params.append('to', toDate);
+        if (debouncedSearch.trim()) params.append('search', debouncedSearch.trim());
         return params.toString();
-    }, [page, limit, typeFilter, fromDate, toDate]);
+    }, [page, limit, typeFilter, fromDate, toDate, debouncedSearch]);
 
     const {
         data: historyData,
@@ -506,38 +554,16 @@ export const Kassa = () => {
     const meta = historyData?.meta || { total: 0, page: 1, totalPages: 1 };
     const totalPages = Math.max(meta.totalPages || 1, 1);
 
-    const filteredTransactions = useMemo(() => {
-        if (!searchTerm.trim()) return transactions;
-        const term = searchTerm.trim().toLowerCase();
-        return transactions.filter(tx => {
-            const reason = (tx.reason || tx.source || '').toLowerCase();
-            return reason.includes(term);
-        });
-    }, [transactions, searchTerm]);
+    // Qidiruv endi serverda bajariladi (butun tarix bo'yicha, faqat joriy sahifa emas),
+    // shuning uchun ro'yxatni qayta filtrlamaymiz.
+    const filteredTransactions = transactions;
+    const historySummary = historyData?.data?.summary || null;
 
     const selectedTransaction = useMemo(() => {
         if (!transactionId) return null;
         return transactions.find(tx => tx._id === transactionId) || null;
     }, [transactionId, transactions]);
 
-    const monthlyStats = useMemo(() => {
-        const now = new Date();
-        const currentMonth = now.getMonth();
-        const currentYear = now.getFullYear();
-        let income = 0;
-        let expense = 0;
-
-        if (historyData?.data?.history) {
-            historyData.data.history.forEach(tx => {
-                const txDate = new Date(tx.createdAt);
-                if (txDate.getMonth() === currentMonth && txDate.getFullYear() === currentYear) {
-                    if (tx.type === 'KIRIM') income += Number(tx.amount);
-                    else if (tx.type === 'CHIQIM') expense += Number(tx.amount);
-                }
-            });
-        }
-        return { income, expense };
-    }, [historyData]);
 
     const clearFilters = () => {
         setTypeFilter('');
@@ -557,7 +583,14 @@ export const Kassa = () => {
             showToast('Chop etish uchun operatsiyalar topilmadi.', 'error');
             return;
         }
-        const html = buildKassaHistoryPrintHtml({ transactions, typeFilter, fromDate, toDate, balance });
+        const html = buildKassaHistoryPrintHtml({
+            transactions,
+            typeFilter,
+            fromDate,
+            toDate,
+            balance,
+            totals: historySummary,
+        });
         printHtmlDocument(html, () => showToast('Chop etishda xatolik yuz berdi.', 'error'));
     };
 
@@ -566,7 +599,11 @@ export const Kassa = () => {
             showToast('Chop etish uchun ma’lumot yo‘q.', 'error');
             return;
         }
-        const html = buildKassaGroupPrintHtml({ selectedMonth, groupData });
+        const html = buildKassaGroupPrintHtml({
+            selectedMonth: groupMeta?.month || selectedMonth,
+            groupData,
+            totals: groupMeta,
+        });
         printHtmlDocument(html, () => showToast('Chop etishda xatolik yuz berdi.', 'error'));
     };
 
@@ -615,6 +652,7 @@ export const Kassa = () => {
             showToast('Kirim muvaffaqiyatli yozildi.', 'success');
             await mutateBalance();
             await mutateHistory();
+            await mutateSummary();
             setIncomeModalOpen(false);
         } catch (err) {
             showToast(err.response?.data?.message || err.message || 'Xatolik yuz berdi.', 'error');
@@ -696,6 +734,7 @@ export const Kassa = () => {
             showToast('Chiqim muvaffaqiyatli yozildi.', 'success');
             await mutateBalance();
             await mutateHistory();
+            await mutateSummary();
             fetchExpenseSuggestions();
             setExpenseModalOpen(false);
         } catch (err) {
@@ -705,45 +744,28 @@ export const Kassa = () => {
         }
     };
 
+    // Chiqimlar guruhlari to'liq serverda hisoblanadi (oy bo'yicha, sahifalashsiz).
+    // Ilgari faqat tarixning birinchi 100 tasi olinib guruhlardi — yig'indi kam chiqardi.
     const fetchGroupData = useCallback(async (month) => {
         if (!month) return;
-        const [year, monthNum] = month.split('-').map(Number);
-        const from = new Date(year, monthNum - 1, 1);
-        const to = new Date(year, monthNum, 0);
-        const fromISO = from.toISOString();
-        const toISO = to.toISOString();
-
         setGroupLoading(true);
         setGroupError(null);
         try {
-            const params = new URLSearchParams({
-                type: 'CHIQIM',
-                from: fromISO,
-                to: toISO,
-                limit: 1000,
+            const params = new URLSearchParams({ month });
+            const resp = await api.get(`${GROUPS_URL}?${params.toString()}`);
+            const data = resp.data?.data || {};
+            setGroupData(data.groups || []);
+            setGroupMeta({
+                total: Number(data.total || 0),
+                count: Number(data.count || 0),
+                groupCount: Number(data.groupCount || 0),
+                averagePerGroup: Number(data.averagePerGroup || 0),
+                month: data.month || month,
+                monthLabel: data.monthLabel || monthKeyToLabel(month),
+                generatedAt: data.generatedAt || null,
             });
-            const resp = await api.get(`${HISTORY_URL}?${params.toString()}`);
-            const items = resp.data?.data?.history || [];
-
-            const groups = items.reduce((acc, tx) => {
-                const reason = tx.reason || 'Izohsiz';
-                if (!acc[reason]) {
-                    acc[reason] = { total: 0, count: 0 };
-                }
-                acc[reason].total += Number(tx.amount);
-                acc[reason].count += 1;
-                return acc;
-            }, {});
-
-            const groupedArray = Object.entries(groups).map(([note, data]) => ({
-                note,
-                total: data.total,
-                count: data.count,
-            }));
-            groupedArray.sort((a, b) => b.total - a.total);
-            setGroupData(groupedArray);
         } catch (err) {
-            setGroupError(err.message || 'Maʼlumotlarni yuklashda xatolik');
+            setGroupError(err.response?.data?.message || err.message || 'Maʼlumotlarni yuklashda xatolik');
             showToast('Chiqimlarni yuklab bo‘lmadi.', 'error');
         } finally {
             setGroupLoading(false);
@@ -757,12 +779,17 @@ export const Kassa = () => {
     }, [groupModalOpen, selectedMonth, fetchGroupData]);
 
     const openGroupModal = () => {
+        // Server qaysi oyni "joriy" deb hisoblasa — o'shani tanlaymiz.
+        if (serverCurrentMonth && serverCurrentMonth !== selectedMonth) {
+            setSelectedMonth(serverCurrentMonth);
+        }
         setGroupModalOpen(true);
     };
 
     const closeGroupModal = () => {
         setGroupModalOpen(false);
         setGroupData([]);
+        setGroupMeta(null);
         setGroupError(null);
     };
 
@@ -823,6 +850,7 @@ export const Kassa = () => {
             showToast('Izoh muvaffaqiyatli yangilandi.', 'success');
             await mutateHistory();
             await mutateBalance();
+            await mutateSummary();
             closeEditModal();
         } catch (err) {
             showToast(err.response?.data?.message || err.message || 'Xatolik yuz berdi.', 'error');
@@ -855,6 +883,7 @@ export const Kassa = () => {
             }
             await mutateBalance();
             await mutateHistory();
+            await mutateSummary();
         } catch (err) {
             showToast(err.response?.data?.message || err.message || 'O‘chirishda xatolik.', 'error');
         } finally {
@@ -1088,17 +1117,25 @@ export const Kassa = () => {
                     </div>
                     <StatCard
                         icon={ArrowUpCircle}
-                        label="Shu oygi Kirim"
-                        value={monthlyStats.income}
+                        label={summary ? `${summary.monthLabel} kirimi` : 'Shu oygi Kirim'}
+                        value={summaryLoading && !summary ? undefined : summary?.income ?? 0}
                         color="green"
-                        subValue="Jami tushumlar"
+                        subValue={
+                            summary?.change
+                                ? `Jami tushumlar · o‘tgan oyga nisbatan ${summary.change.incomePercent > 0 ? '+' : ''}${summary.change.incomePercent}%`
+                                : 'Jami tushumlar (server hisobida)'
+                        }
                     />
                     <StatCard
                         icon={ArrowDownCircle}
-                        label="Shu oygi Chiqim"
-                        value={monthlyStats.expense}
+                        label={summary ? `${summary.monthLabel} chiqimi` : 'Shu oygi Chiqim'}
+                        value={summaryLoading && !summary ? undefined : summary?.expense ?? 0}
                         color="red"
-                        subValue="Jami xarajatlar"
+                        subValue={
+                            summary?.change
+                                ? `Jami xarajatlar · o‘tgan oyga nisbatan ${summary.change.expensePercent > 0 ? '+' : ''}${summary.change.expensePercent}%`
+                                : 'Jami xarajatlar (server hisobida)'
+                        }
                     />
                 </div>
 
@@ -1144,16 +1181,36 @@ export const Kassa = () => {
                     )}
                 </div>
 
+                {historySummary && (
+                    <div className="flex flex-wrap items-center gap-x-6 gap-y-1 bg-white rounded-xl border border-gray-200 px-5 py-3 mb-4 shadow-sm text-sm">
+                        <span className="text-gray-500">
+                            Joriy filtr bo‘yicha: <span className="font-semibold text-gray-900">{historySummary.count}</span> ta operatsiya
+                        </span>
+                        <span className="text-gray-500">
+                            Kirim: <span className="font-semibold text-green-600">+{Number(historySummary.income || 0).toLocaleString()} $</span>
+                        </span>
+                        <span className="text-gray-500">
+                            Chiqim: <span className="font-semibold text-red-600">-{Number(historySummary.expense || 0).toLocaleString()} $</span>
+                        </span>
+                        <span className="text-gray-500">
+                            Sof: <span className={`font-semibold ${historySummary.net >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {historySummary.net >= 0 ? '+' : ''}{Number(historySummary.net || 0).toLocaleString()} $
+                            </span>
+                        </span>
+                        <span className="ml-auto text-xs text-gray-400">Hisob-kitob serverda (sahifadagi qatorlar emas)</span>
+                    </div>
+                )}
+
                 <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
-                    {(historyError || balanceError) ? (
+                    {(historyError || balanceError || (!summaryLoading && summaryError)) ? (
                         <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
                             <AlertCircle className="w-10 h-10 text-red-400 mb-3" />
                             <p className="text-gray-700 font-medium mb-1">Maʼlumotlarni yuklab bo‘lmadi</p>
                             <p className="text-sm text-gray-500 mb-4">
-                                {historyError?.response?.data?.message || balanceError?.response?.data?.message || 'Server bilan bog‘lanishda xatolik.'}
+                                {historyError?.response?.data?.message || balanceError?.response?.data?.message || summaryError?.response?.data?.message || 'Server bilan bog‘lanishda xatolik.'}
                             </p>
                             <button
-                                onClick={() => { mutateBalance(); mutateHistory(); }}
+                                onClick={() => { mutateBalance(); mutateHistory(); mutateSummary(); }}
                                 className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg"
                             >
                                 Qayta urinish
@@ -1265,6 +1322,7 @@ export const Kassa = () => {
                         <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200 bg-gray-50/50">
                             <span className="text-sm text-gray-500">
                                 Sahifa <span className="font-medium text-gray-900">{page}</span> / {totalPages}
+                                <span className="text-gray-400"> · jami {Number(meta.total || 0).toLocaleString()} ta yozuv</span>
                             </span>
                             <div className="flex gap-2">
                                 <button
@@ -1487,7 +1545,8 @@ export const Kassa = () => {
                                     Chiqimlar guruhlari
                                 </h2>
                                 <p className="text-sm text-gray-500 mt-1">
-                                    Tanlangan oy bo‘yicha chiqimlar sabab (izoh) bo‘yicha guruhlangan
+                                    {groupMeta?.monthLabel || monthKeyToLabel(selectedMonth)} — chiqimlar sabab (izoh) bo‘yicha,
+                                    to‘liq server hisobida (sahifalashga bog‘liq emas)
                                 </p>
                             </div>
 
@@ -1516,6 +1575,27 @@ export const Kassa = () => {
                                 </button>
                             </div>
 
+                            {!groupLoading && groupMeta && (
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                                    <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+                                        <p className="text-xs text-gray-500">Jami chiqim</p>
+                                        <p className="text-base font-bold text-red-600">{Number(groupMeta.total).toLocaleString()} $</p>
+                                    </div>
+                                    <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+                                        <p className="text-xs text-gray-500">Operatsiyalar</p>
+                                        <p className="text-base font-bold text-gray-900">{Number(groupMeta.count).toLocaleString()} ta</p>
+                                    </div>
+                                    <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+                                        <p className="text-xs text-gray-500">Guruhlar</p>
+                                        <p className="text-base font-bold text-gray-900">{Number(groupMeta.groupCount).toLocaleString()} ta</p>
+                                    </div>
+                                    <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+                                        <p className="text-xs text-gray-500">O‘rtacha guruh</p>
+                                        <p className="text-base font-bold text-gray-900">{Number(groupMeta.averagePerGroup).toLocaleString()} $</p>
+                                    </div>
+                                </div>
+                            )}
+
                             {groupLoading ? (
                                 <div className="flex justify-center py-10">
                                     <Loader2 size={28} className="animate-spin text-purple-600" />
@@ -1536,25 +1616,33 @@ export const Kassa = () => {
                                         <thead className="bg-gray-50 border-b border-gray-200">
                                             <tr>
                                                 <th className="px-4 py-3 text-left font-semibold text-gray-600">Sabab / Izoh</th>
+                                                <th className="px-4 py-3 text-right font-semibold text-gray-600">Soni</th>
                                                 <th className="px-4 py-3 text-right font-semibold text-gray-600">Jami summa ($)</th>
+                                                <th className="px-4 py-3 text-right font-semibold text-gray-600">Ulush</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-100">
-                                            {groupData.map((item, idx) => (
-                                                <tr key={idx} className="hover:bg-gray-50 transition">
-                                                    <td className="px-4 py-3 text-gray-800 font-medium">{item.note}</td>
+                                            {groupData.map((item) => (
+                                                <tr key={item.key ?? item.label} className="hover:bg-gray-50 transition">
+                                                    <td className="px-4 py-3 text-gray-800 font-medium">{item.label || item.note}</td>
+                                                    <td className="px-4 py-3 text-right text-gray-600">{Number(item.count || 0).toLocaleString()}</td>
                                                     <td className="px-4 py-3 text-right font-bold text-red-600">
-                                                        {item.total.toLocaleString()}
+                                                        {Number(item.total || 0).toLocaleString()}
                                                     </td>
+                                                    <td className="px-4 py-3 text-right text-gray-500">{Number(item.percent || 0)}%</td>
                                                 </tr>
                                             ))}
                                         </tbody>
                                         <tfoot className="border-t-2 border-gray-300 bg-gray-50">
                                             <tr>
                                                 <td className="px-4 py-3 font-bold text-gray-800">Jami</td>
-                                                <td className="px-4 py-3 text-right font-bold text-red-700">
-                                                    {groupData.reduce((sum, item) => sum + item.total, 0).toLocaleString()}
+                                                <td className="px-4 py-3 text-right font-bold text-gray-700">
+                                                    {Number(groupMeta?.count ?? groupData.reduce((sum, item) => sum + Number(item.count || 0), 0)).toLocaleString()}
                                                 </td>
+                                                <td className="px-4 py-3 text-right font-bold text-red-700">
+                                                    {Number(groupMeta?.total ?? groupData.reduce((sum, item) => sum + Number(item.total || 0), 0)).toLocaleString()}
+                                                </td>
+                                                <td className="px-4 py-3 text-right font-bold text-gray-700">100%</td>
                                             </tr>
                                         </tfoot>
                                     </table>

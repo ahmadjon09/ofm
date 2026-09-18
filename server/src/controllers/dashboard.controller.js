@@ -2,6 +2,19 @@ import { config } from '../config/index.js';
 import { sendSuccess } from '../lib/helpers.js';
 import { dashboardStore, getCache, setCache } from '../lib/cache.js';
 import { Client, Order, Product } from '../models/index.js';
+import {
+    addLocalDays,
+    currentMonthKey,
+    getTimezoneOffsetMinutes,
+    getTimezoneOffsetMs,
+    localParts,
+    monthKeyRange,
+    parseMonthKey,
+    shiftMonthKey,
+    startOfLocalDay,
+    startOfLocalMonth,
+    UZ_MONTH_NAMES,
+} from '../lib/datetime.js';
 const dashboardController = {
     async stats(req, res) {
         const cached = getCache(dashboardStore);
@@ -10,13 +23,19 @@ const dashboardController = {
         }
 
         const now = new Date();
-        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+        // Barcha davr chegaralari ish mintaqasi (TIMEZONE_OFFSET_MINUTES) bo'yicha,
+        // shunda Dashboard raqamlari Kassa sahifasidagi oylik ko'rsatkichlar bilan mos keladi.
+        const offsetMinutes = getTimezoneOffsetMinutes();
+        const offsetMs = getTimezoneOffsetMs();
+        const monthKey = currentMonthKey(now, offsetMinutes);
+        const startOfToday = startOfLocalDay(now, offsetMinutes);
+        const startOfMonth = startOfLocalMonth(now, offsetMinutes);
+        const lastMonthRange = monthKeyRange(shiftMonthKey(monthKey, -1), offsetMinutes);
+        const startOfLastMonth = lastMonthRange.start;
+        const endOfLastMonthExclusive = lastMonthRange.endExclusive;
 
-        const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
-        const thirtyDaysAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29);
+        const sixMonthsAgo = monthKeyRange(shiftMonthKey(monthKey, -5), offsetMinutes).start;
+        const thirtyDaysAgo = addLocalDays(startOfLocalDay(now, offsetMinutes), -29, offsetMinutes);
 
         const [
             totalProducts,
@@ -41,7 +60,7 @@ const dashboardController = {
             Order.countDocuments({}),
             Order.countDocuments({ createdAt: { $gte: startOfToday } }),
             Order.countDocuments({ createdAt: { $gte: startOfMonth } }),
-            Order.countDocuments({ createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth } }),
+            Order.countDocuments({ createdAt: { $gte: startOfLastMonth, $lt: endOfLastMonthExclusive } }),
 
             Order.aggregate([
                 { $match: { status: { $ne: 'cancelled' } } },
@@ -51,7 +70,7 @@ const dashboardController = {
                 {
                     $match: {
                         status: { $ne: 'cancelled' },
-                        createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth },
+                        createdAt: { $gte: startOfLastMonth, $lt: endOfLastMonthExclusive },
                     },
                 },
                 { $group: { _id: null, total: { $sum: '$orderTotal' } } },
@@ -106,7 +125,12 @@ const dashboardController = {
                 },
                 {
                     $group: {
-                        _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
+                        // createdAt dan mintaqa siljishini ayiramiz -> UTC bo'laklari
+                        // mahalliy vaqtga teng bo'ladi (MongoDB timezone opsiyasisiz ham ishlaydi).
+                        _id: {
+                            year: { $year: { $subtract: ['$createdAt', offsetMs] } },
+                            month: { $month: { $subtract: ['$createdAt', offsetMs] } },
+                        },
                         revenue: { $sum: '$orderTotal' },
                         ordersCount: { $sum: 1 },
                     },
@@ -124,9 +148,9 @@ const dashboardController = {
                 {
                     $group: {
                         _id: {
-                            year: { $year: '$createdAt' },
-                            month: { $month: '$createdAt' },
-                            day: { $dayOfMonth: '$createdAt' },
+                            year: { $year: { $subtract: ['$createdAt', offsetMs] } },
+                            month: { $month: { $subtract: ['$createdAt', offsetMs] } },
+                            day: { $dayOfMonth: { $subtract: ['$createdAt', offsetMs] } },
                         },
                         revenue: { $sum: '$orderTotal' },
                         ordersCount: { $sum: 1 },
@@ -152,22 +176,19 @@ const dashboardController = {
                 .lean(),
         ]);
 
-        const monthNames = [
-            'Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
-            'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr',
-        ];
+        const monthNames = UZ_MONTH_NAMES;
 
         const monthlyTrendMap = new Map(
-            monthlyTrend.map((m) => [`${m._id.year}-${m._id.month}`, m])
+            monthlyTrend.map((m) => [`${m._id.year}-${String(m._id.month).padStart(2, '0')}`, m])
         );
         const monthlyRevenueTrend = [];
-        for (let i = 5; i >= 0; i--) {
-            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-            const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
+        for (let i = 5; i >= 0; i -= 1) {
+            const key = shiftMonthKey(monthKey, -i);
+            const parsed = parseMonthKey(key);
             const found = monthlyTrendMap.get(key);
             monthlyRevenueTrend.push({
-                month: monthNames[d.getMonth()],
-                year: d.getFullYear(),
+                month: monthNames[parsed.month - 1],
+                year: parsed.year,
                 revenue: found?.revenue || 0,
                 ordersCount: found?.ordersCount || 0,
             });
@@ -178,11 +199,12 @@ const dashboardController = {
         );
         const dailyRevenueTrend = [];
         for (let i = 29; i >= 0; i--) {
-            const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-            const key = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+            const day = addLocalDays(startOfLocalDay(now, offsetMinutes), -i, offsetMinutes);
+            const parts = localParts(day, offsetMinutes);
+            const key = `${parts.year}-${parts.month}-${parts.day}`;
             const found = dailyTrendMap.get(key);
             dailyRevenueTrend.push({
-                date: `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`,
+                date: `${String(parts.day).padStart(2, '0')}.${String(parts.month).padStart(2, '0')}`,
                 revenue: found?.revenue || 0,
                 ordersCount: found?.ordersCount || 0,
             });

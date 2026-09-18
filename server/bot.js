@@ -8,6 +8,7 @@ import { createReadStream } from 'fs';
 import os from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
+import { currentMonthKey, localParts, monthKeyRange, shiftMonthKey, startOfLocalMonth } from './src/lib/datetime.js';
 
 dns.setDefaultResultOrder('ipv4first');
 
@@ -306,7 +307,7 @@ export async function startBot() {
     bot.action('menu:stats', requireAdmin, async (ctx) => {
         await ctx.answerCbQuery();
         const now = new Date();
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const startOfMonth = startOfLocalMonth(now);
 
         const [totalProducts, totalClients, totalOrders, monthlyAgg, debtAgg, kassa] = await Promise.all([
             Product.countDocuments(),
@@ -329,7 +330,7 @@ export async function startBot() {
             `📦 Mahsulot turlari: <b>${totalProducts}</b>\n` +
             `👥 Mijozlar: <b>${totalClients}</b>\n` +
             `🧾 Jami buyurtmalar: <b>${totalOrders}</b>\n\n` +
-            `📅 <b>${MONTH_NAMES_UZ[now.getMonth()]}</b> oyi:\n` +
+            `📅 <b>${MONTH_NAMES_UZ[localParts(now).month - 1]}</b> oyi:\n` +
             `　 • Buyurtmalar: <b>${monthlyCount}</b> ta\n` +
             `　 • Savdo summasi: <b>${money(monthlyRevenue)}</b>\n\n` +
             `💰 Kassa balansi: <b>${money(kassa?.balance)}</b>\n` +
@@ -371,17 +372,18 @@ export async function startBot() {
         await ctx.answerCbQuery();
         const now = new Date();
         const buttons = [];
+        const currentKey = currentMonthKey(now);
         for (let i = 0; i < 6; i++) {
-            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-            const label = `${MONTH_NAMES_UZ[d.getMonth()]} ${d.getFullYear()}`;
-            const value = `${d.getFullYear()}-${d.getMonth() + 1}`;
-            buttons.push([Markup.button.callback(label, `monthly:pick:${value}`)]);
+            const key = shiftMonthKey(currentKey, -i);
+            const [yearNum, monthNum] = key.split('-').map(Number);
+            const label = `${MONTH_NAMES_UZ[monthNum - 1]} ${yearNum}`;
+            buttons.push([Markup.button.callback(label, `monthly:pick:${key}`)]);
         }
         buttons.push([Markup.button.callback('◀️ Bosh menyu', 'menu:main')]);
         await ctx.editMessageText('📅 Qaysi oy uchun hisobot kerak?', Markup.inlineKeyboard(buttons));
     });
 
-    bot.action(/^monthly:pick:(\d+)-(\d+)$/, requireAdmin, async (ctx) => {
+    bot.action(/^monthly:pick:(\d{4})-(\d{2})$/, requireAdmin, async (ctx) => {
         await ctx.answerCbQuery();
         const [, year, month] = ctx.match;
         const label = `${MONTH_NAMES_UZ[Number(month) - 1]} ${year}`;
@@ -391,11 +393,13 @@ export async function startBot() {
         );
     });
 
-    bot.action(/^monthly:(excel|pdf):(\d+)-(\d+)$/, requireAdmin, async (ctx) => {
+    bot.action(/^monthly:(excel|pdf):(\d{4})-(\d{2})$/, requireAdmin, async (ctx) => {
         await ctx.answerCbQuery('Tayyorlanmoqda...');
         const [, format, year, month] = ctx.match;
-        const start = new Date(Number(year), Number(month) - 1, 1);
-        const end = new Date(Number(year), Number(month), 1);
+        // Oy chegaralari ish mintaqasi bo'yicha (config.timezoneOffsetMinutes).
+        const range = monthKeyRange(`${year}-${month}`);
+        const start = range.start;
+        const end = range.endExclusive;
 
         const orders = await Order.find({ createdAt: { $gte: start, $lt: end } })
             .populate('client', 'name phone')
