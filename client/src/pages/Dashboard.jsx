@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import useSWR from 'swr';
 import api from '../middlewares/fetcher';
 import {
@@ -277,17 +277,53 @@ const ExportModal = ({ isOpen, onClose }) => {
     );
 };
 
+const MONTH_NAMES_UZ = [
+    'Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
+    'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr',
+];
+
+const monthKeyToLabel = (monthKey) => {
+    const match = /^(\d{4})-(\d{2})$/.exec(String(monthKey || ''));
+    if (!match) return '-';
+    return `${MONTH_NAMES_UZ[Number(match[2]) - 1]} ${match[1]}`;
+};
+
 // ============================================================
 // MAIN COMPONENT
 // ============================================================
 export const Dashboard = () => {
     const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
-    // ---------- SWR ----------
-    const { data, error, isLoading, mutate } = useSWR(
-        DASHBOARD_URL,
+    // Dashboard oy tanlagichi — tanlangan oyga oid ko'rsatkichlar (oylik savdo,
+    // daromad, kunlik trend, so'nggi buyurtmalar, holat taqsimoti) faqat shu oy
+    // uchun hisoblanadi. Kumulyativ ko'rsatkichlar (jami mahsulotlar, mijozlar,
+    // buyurtmalar, jami qarz, ombor qiymati, 6 oylik trend) har doim umumiy bo'lib qoladi.
+    const [selectedMonth, setSelectedMonth] = useState(() => {
+        const now = new Date();
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    });
+
+    // Balansni (kassa) alohida olamiz — u hech qachon oyga bog'liq bo'lmaydi,
+    // doim joriy (kumulyativ) qiymat.
+    const { data: kassaData } = useSWR(
+        '/kassa',
         (url) => api.get(url).then((res) => res.data),
-        { revalidateOnFocus: true, refreshInterval: 60000 } // refresh every minute
+        { revalidateOnFocus: true, refreshInterval: 60000 }
+    );
+    const kassaBalance = kassaData?.data?.balance ?? null;
+
+    // ---------- SWR ----------
+    const dashboardUrl = useMemo(() => {
+        const params = new URLSearchParams();
+        if (selectedMonth) params.append('month', selectedMonth);
+        const qs = params.toString();
+        return qs ? `${DASHBOARD_URL}?${qs}` : DASHBOARD_URL;
+    }, [selectedMonth]);
+
+    const { data, error, isLoading, mutate } = useSWR(
+        dashboardUrl,
+        (url) => api.get(url).then((res) => res.data),
+        { revalidateOnFocus: true, refreshInterval: 60000 }
     );
 
     const stats = data?.data || {};
@@ -301,6 +337,9 @@ export const Dashboard = () => {
         revenue = 0,
         totalDebt = 0,
         totalKg = 0,
+        totalRevenueAllTime = 0,
+        selectedMonthLabel = monthKeyToLabel(selectedMonth),
+        isCurrentMonth = true,
         growth = {},
         topProducts = [],
         latestOrders = [],
@@ -352,12 +391,23 @@ export const Dashboard = () => {
         <div className="min-h-screen py-6 px-4 sm:px-6">
             <div className="mx-auto">
                 {/* Header */}
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
                     <div>
                         <h1 className="text-2xl font-bold text-gray-900">Boshqaruv Paneli</h1>
                         <p className="text-sm text-gray-500 mt-1">Biznesingizning joriy holati va tahlillari</p>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
+                        <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-lg border border-gray-200 shadow-sm">
+                            <Calendar size={16} className="text-blue-600" />
+                            <label htmlFor="dash-month-picker" className="text-sm font-medium text-gray-700 whitespace-nowrap">Oy:</label>
+                            <input
+                                id="dash-month-picker"
+                                type="month"
+                                value={selectedMonth}
+                                onChange={(e) => setSelectedMonth(e.target.value)}
+                                className="text-sm border-0 outline-none bg-transparent font-semibold text-blue-700 cursor-pointer"
+                            />
+                        </div>
                         <div className="flex items-center gap-2 text-sm text-gray-500 bg-white px-3 py-1.5 rounded-lg border border-gray-200 shadow-sm">
                             <Clock size={16} />
                             <span>{new Date().toLocaleDateString('uz-UZ')}</span>
@@ -369,6 +419,34 @@ export const Dashboard = () => {
                             <Download size={18} />
                             Hisobot olish
                         </button>
+                    </div>
+                </div>
+
+                {/* Oy banner — qaysi oy ko'rsatilayotganligi va balans (kumulyativ) */}
+                <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl px-6 py-4 mb-6 text-white shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                        <Calendar size={28} className="opacity-80" />
+                        <div>
+                            <p className="text-xs uppercase tracking-wider opacity-80">Ko‘rsatilayotgan oy</p>
+                            <p className="text-xl font-bold">{selectedMonthLabel}</p>
+                            <p className="text-xs opacity-80 mt-0.5">
+                                {isCurrentMonth ? 'Joriy oy' : 'Tanlangan oy'} — savdo, daromad va buyurtmalar shu oyga moslangan
+                            </p>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-5">
+                        <div className="bg-white/15 backdrop-blur-sm rounded-xl px-4 py-2">
+                            <p className="text-xs uppercase tracking-wider opacity-80">Joriy kassa balansi</p>
+                            <p className="text-xl font-bold">
+                                {kassaBalance === null ? '...' : `${Number(kassaBalance).toLocaleString()} $`}
+                            </p>
+                            <p className="text-[10px] opacity-70">Barcha davr bo‘yicha (oyga bog‘liq emas)</p>
+                        </div>
+                        <div className="bg-white/15 backdrop-blur-sm rounded-xl px-4 py-2">
+                            <p className="text-xs uppercase tracking-wider opacity-80">Umumiy daromad (barcha davr)</p>
+                            <p className="text-xl font-bold">{Number(totalRevenueAllTime || 0).toLocaleString()} $</p>
+                            <p className="text-[10px] opacity-70">Kumulyativ</p>
+                        </div>
                     </div>
                 </div>
 
@@ -394,7 +472,7 @@ export const Dashboard = () => {
                     />
                     <StatCard
                         icon={DollarSign}
-                        label="Umumiy daromad"
+                        label={`${selectedMonthLabel} daromadi`}
                         value={`${revenue.toLocaleString()} $`}
                         color="purple"
                         growth={growth?.revenuePercent}
@@ -413,13 +491,13 @@ export const Dashboard = () => {
                     />
                     <StatCard
                         icon={Calendar}
-                        label="Bugungi savdo"
+                        label={isCurrentMonth ? "Bugungi savdo" : "Tanlangan oyning oxirgi kuni"}
                         value={todaysOrders}
                         color="yellow"
                     />
                     <StatCard
                         icon={TrendingUp}
-                        label="Oylik savdo"
+                        label={`${selectedMonthLabel} — buyurtmalar`}
                         value={monthlyOrders}
                         color="green"
                         growth={growth?.ordersPercent}
@@ -460,7 +538,7 @@ export const Dashboard = () => {
                     </ChartCard>
 
                     {/* Daily Revenue Trend */}
-                    <ChartCard title="Kunlik daromad (oxirgi 30 kun)">
+                    <ChartCard title={`Kunlik daromad — ${selectedMonthLabel}`}>
                         {dailyRevenueTrend.length === 0 ? (
                             <div className="flex flex-col items-center justify-center h-64 text-gray-400  rounded-lg">
                                 <LineChart size={48} className="mb-2 opacity-20" />
@@ -585,7 +663,7 @@ export const Dashboard = () => {
                     <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-200 p-6 shadow-sm">
                         <div className="flex items-center justify-between mb-4">
                             <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">
-                                So‘nggi buyurtmalar
+                                So‘nggi buyurtmalar — {selectedMonthLabel}
                             </h3>
                             <button className="text-xs text-blue-600 font-medium hover:underline">Barchasini ko'rish</button>
                         </div>
