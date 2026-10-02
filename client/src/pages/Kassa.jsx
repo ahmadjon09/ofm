@@ -20,6 +20,7 @@ import {
     Pencil,
     Save,
     Trash2,
+    Calendar,
 } from 'lucide-react';
 
 const KASSA_URL = '/kassa';
@@ -456,6 +457,15 @@ export const Kassa = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [debouncedSearch, setDebouncedSearch] = useState('');
 
+    // Asosiy tarix va xulosa uchun oy filtri — tanlangan oyda faqat shu oyning
+    // operatsiyalari ko'rinadi. Balans har doim kumulyativ (barcha davr) qoladi.
+    // "Barcha oylar" uchun bo'sh satr — u holda hech qanday oy cheklovi qo'yilmaydi.
+    const currentMonthStr = (() => {
+        const now = new Date();
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    })();
+    const [historyMonth, setHistoryMonth] = useState(currentMonthStr);
+
     useEffect(() => {
         const timer = setTimeout(() => setDebouncedSearch(searchTerm), 350);
         return () => clearTimeout(timer);
@@ -517,13 +527,25 @@ export const Kassa = () => {
     const serverCurrentMonth = balanceData?.data?.currentMonth || null;
 
     // Oylik tushum/chiqim — to'liq serverdan (bugungi ko'rinib turgan sahifadan emas).
+    // Tanlangan oyga bog'liq holda SWR kalitiga oyni ham kiritamiz, shunda oylar
+    // orasida almashganda eski xulosa ko'rsatib qolmaydi.
+    const summaryQuery = useMemo(() => {
+        const params = new URLSearchParams();
+        if (!fromDate && !toDate && historyMonth) params.append('month', historyMonth);
+        if (typeFilter) params.append('type', typeFilter);
+        if (fromDate) params.append('from', fromDate);
+        if (toDate) params.append('to', toDate);
+        const qs = params.toString();
+        return qs ? `${SUMMARY_URL}?${qs}` : SUMMARY_URL;
+    }, [historyMonth, fromDate, toDate, typeFilter]);
+
     const {
         data: summaryData,
         error: summaryError,
         isLoading: summaryLoading,
         mutate: mutateSummary,
     } = useSWR(
-        SUMMARY_URL,
+        summaryQuery,
         (url) => api.get(url).then((res) => res.data),
         { revalidateOnFocus: true }
     );
@@ -531,12 +553,17 @@ export const Kassa = () => {
 
     const buildQuery = useCallback(() => {
         const params = new URLSearchParams({ page, limit });
+        // Sana diapazoni (from/to) kiritilgan bo'lsa — oy filtrlari e'tiborga olinmaydi
+        // (sana filtri ustuvor). Aks holda tanlangan oy qo'llanadi.
+        if (!fromDate && !toDate && historyMonth) {
+            params.append('month', historyMonth);
+        }
         if (typeFilter) params.append('type', typeFilter);
         if (fromDate) params.append('from', fromDate);
         if (toDate) params.append('to', toDate);
         if (debouncedSearch.trim()) params.append('search', debouncedSearch.trim());
         return params.toString();
-    }, [page, limit, typeFilter, fromDate, toDate, debouncedSearch]);
+    }, [page, limit, typeFilter, fromDate, toDate, debouncedSearch, historyMonth]);
 
     const {
         data: historyData,
@@ -565,11 +592,17 @@ export const Kassa = () => {
     }, [transactionId, transactions]);
 
 
+    // Oy, filtr yoki qidiruv o'zgarsa — sahifani birinchiga qaytaramiz.
+    useEffect(() => {
+        setPage(1);
+    }, [historyMonth, typeFilter, fromDate, toDate, debouncedSearch]);
+
     const clearFilters = () => {
         setTypeFilter('');
         setFromDate('');
         setToDate('');
         setSearchTerm('');
+        setHistoryMonth(currentMonthStr);
         setPage(1);
     };
 
@@ -1139,6 +1172,45 @@ export const Kassa = () => {
                     />
                 </div>
 
+                {/* Oy tanlash paneli — tarix va oylik kartochkalar shu oyga moslanadi,
+                    balans esa har doim barcha davr bo'yicha qoladi. */}
+                <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4 flex flex-col sm:flex-row sm:items-center gap-3 shadow-sm">
+                    <div className="flex items-center gap-2">
+                        <Calendar className="text-blue-600" size={20} />
+                        <label htmlFor="kassa-month-picker" className="text-sm font-semibold text-gray-700 whitespace-nowrap">
+                            Oy bo‘yicha filtrlash:
+                        </label>
+                    </div>
+                    <input
+                        id="kassa-month-picker"
+                        type="month"
+                        value={historyMonth}
+                        onChange={(e) => setHistoryMonth(e.target.value)}
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    />
+                    {historyMonth && (
+                        <button
+                            onClick={() => setHistoryMonth('')}
+                            className="px-3 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition whitespace-nowrap"
+                            title="Barcha oylarni ko‘rsatish"
+                        >
+                            Barcha oylar
+                        </button>
+                    )}
+                    {historyMonth ? (
+                        <span className="text-sm text-blue-700 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 font-medium">
+                            {monthKeyToLabel(historyMonth)} — faqat shu oy operatsiyalari
+                        </span>
+                    ) : (
+                        <span className="text-sm text-gray-500 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200">
+                            Barcha oylar ko‘rsatilmoqda
+                        </span>
+                    )}
+                    <span className="ml-auto text-xs text-gray-400">
+                        Balans: barcha davr bo‘yicha
+                    </span>
+                </div>
+
                 <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4 flex flex-col md:flex-row gap-3 md:items-center shadow-sm">
                     <div className="relative flex-1 min-w-[180px]">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
@@ -1163,15 +1235,17 @@ export const Kassa = () => {
                         type="date"
                         value={fromDate}
                         onChange={(e) => { setFromDate(e.target.value); setPage(1); }}
+                        title="Boshlanish sanasi (oy filtrini bekor qiladi)"
                         className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none w-full md:w-auto"
                     />
                     <input
                         type="date"
                         value={toDate}
                         onChange={(e) => { setToDate(e.target.value); setPage(1); }}
+                        title="Tugash sanasi (oy filtrini bekor qiladi)"
                         className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none w-full md:w-auto"
                     />
-                    {(typeFilter || fromDate || toDate || searchTerm) && (
+                    {(typeFilter || fromDate || toDate || searchTerm || historyMonth !== currentMonthStr) && (
                         <button
                             onClick={clearFilters}
                             className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition whitespace-nowrap"
