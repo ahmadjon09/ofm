@@ -241,6 +241,30 @@ function runPipeline(documents, stages = []) {
                 break;
             }
 
+            case '$unwind': {
+                const spec = typeof arg === 'string' ? { path: arg } : arg;
+                // Mongo'da '$items' ham, 'items' ham qabul qilinadi.
+                const path = String(spec.path || '').replace(/^\$/, '');
+                if (!path) fail({ $unwind: arg });
+                const preserve = spec.preserveNullAndEmptyArrays === true;
+                const out = [];
+                docs.forEach((doc) => {
+                    const value = getPath(doc, path);
+                    const items = Array.isArray(value) ? value : (value === undefined || value === null ? [] : [value]);
+                    if (items.length === 0) {
+                        if (preserve) out.push({ ...doc });
+                        return;
+                    }
+                    items.forEach((item) => {
+                        const next = { ...doc };
+                        setPath(next, path, item);
+                        out.push(next);
+                    });
+                });
+                docs = out;
+                break;
+            }
+
             case '$sort': {
                 const criteria = Object.entries(arg);
                 docs = [...docs].sort((a, b) => {
@@ -314,6 +338,16 @@ export function createFakeModel(collection) {
         findOne(filter = {}) { return new FakeQuery(collection, filter, { single: true }).limit(1); },
         countDocuments(filter = {}) {
             return Promise.resolve(collection.filter((doc) => matches(doc, filter)).length);
+        },
+        async distinct(field, filter = {}) {
+            const values = collection
+                .filter((doc) => matches(doc, filter))
+                .map((doc) => getPath(doc, field));
+            const unique = [];
+            values.forEach((value) => {
+                if (!unique.some((item) => String(item) === String(value))) unique.push(value);
+            });
+            return unique;
         },
         aggregate(pipeline = []) { return Promise.resolve(runPipeline(collection.map((d) => ({ ...d })), pipeline)); },
         findById(id) {

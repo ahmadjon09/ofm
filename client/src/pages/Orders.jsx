@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import useSWR from 'swr';
 import api from '../middlewares/fetcher';
@@ -18,7 +18,12 @@ import {
   Package,
   FileText,
   Printer,
+  CalendarRange,
+  Calendar,
+  RotateCcw,
+  CheckCircle2,
 } from 'lucide-react';
+import { rangeForPreset, formatDateRangeLabel } from '../lib/period';
 
 const ORDERS_URL = '/orders';
 const CLIENTS_URL = '/clients';
@@ -523,12 +528,16 @@ export const Orders = () => {
   const [statusFilter, setStatusFilter] = useState('');
   const [clientFilter, setClientFilter] = useState('');
   const [clientFilterLabel, setClientFilterLabel] = useState('');
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+
+  // STANDART FILTR — FAQAT SHU OY (oyning 1-kunidan bugungacha).
+  // Foydalanuvchi eski minglab yozuvlar bilan chalg'imasligi uchun sahifa
+  // ochilganda aynan joriy oy buyurtmalari yuklanadi.
+  const [rangeMode, setRangeMode] = useState('current-month'); // current-month | previous-month | all | custom
+  const [fromDate, setFromDate] = useState(() => rangeForPreset('current-month').startDate);
+  const [toDate, setToDate] = useState(() => rangeForPreset('current-month').endDate);
+
   const [page, setPage] = useState(1);
   const limit = 10;
-
-  const [selectedOrder, setSelectedOrder] = useState(null);
 
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -572,10 +581,27 @@ export const Orders = () => {
     const params = new URLSearchParams({ page, limit });
     if (statusFilter) params.append('status', statusFilter);
     if (clientFilter) params.append('clientId', clientFilter);
-    if (fromDate) params.append('from', new Date(fromDate).toISOString());
-    if (toDate) params.append('to', new Date(toDate).toISOString());
+
+    // Davr: har bir so'rovda startDate/endDate aniq ko'rinadi.
+    // Preset bo'lsa chegaralarni server o'zi (biznes vaqt mintaqasi bo'yicha)
+    // qayta hisoblaydi — klient soati xato bo'lsa ham natija to'g'ri bo'ladi.
+    if (rangeMode === 'all') {
+      params.append('range', 'all');
+    } else if (rangeMode === 'custom' && (fromDate || toDate)) {
+      params.append('range', 'custom');
+      if (fromDate) params.append('startDate', fromDate);
+      if (toDate) params.append('endDate', toDate);
+    } else if (rangeMode === 'custom') {
+      // Sana tanlanmagan — standart holatga qaytamiz
+      params.append('range', 'current-month');
+    } else {
+      const presetRange = rangeForPreset(rangeMode);
+      params.append('range', rangeMode);
+      params.append('startDate', presetRange.startDate);
+      params.append('endDate', presetRange.endDate);
+    }
     return params.toString();
-  }, [page, limit, statusFilter, clientFilter, fromDate, toDate]);
+  }, [page, limit, statusFilter, clientFilter, rangeMode, fromDate, toDate]);
 
   const { data, error, isLoading, isValidating, mutate } = useSWR(
     `${ORDERS_URL}?${buildQuery()}`,
@@ -584,8 +610,40 @@ export const Orders = () => {
   );
 
   const orders = data?.data?.orders || [];
+  const summary = data?.data?.summary || null;
   const meta = data?.meta || { total: 0, page: 1, totalPages: 1 };
   const totalPages = Math.max(meta.totalPages || 1, 1);
+  const rangeMeta = meta.range || null;
+  const fallbackRange = rangeMode === 'custom'
+    ? { startDate: fromDate, endDate: toDate }
+    : rangeForPreset(rangeMode);
+  const rangeLabel = rangeMeta?.label
+    || (rangeMode === 'all'
+      ? 'Barcha vaqt'
+      : fallbackRange.startDate
+        ? formatDateRangeLabel(fallbackRange.startDate, fallbackRange.endDate || fallbackRange.startDate)
+        : 'Shu oy');
+
+  const hasExtraFilters = Boolean(statusFilter || clientFilter);
+  const isDefaultRange = rangeMode === 'current-month';
+  const emptyTitle = rangeMode === 'previous-month'
+    ? "O'tgan oyda hali buyurtmalar mavjud emas"
+    : rangeMode === 'all'
+      ? "Hali birorta buyurtma qo'shilmagan"
+      : rangeMode === 'custom'
+        ? 'Tanlangan davrda buyurtmalar mavjud emas'
+        : 'Joriy oyda hali buyurtmalar mavjud emas';
+  const emptyDescription = rangeMode === 'all'
+    ? "Birinchi buyurtmani qo'shsangiz, ro'yxat shu yerda paydo bo'ladi."
+    : "Bu davrda buyurtma bo'lsa, ular shu ro'yxatda ko'rinadi. Boshqa davrni ham tekshirib ko'rishingiz mumkin.";
+
+  const rangeCaption = rangeMode === 'current-month'
+    ? 'Standart: faqat joriy oy buyurtmalari'
+    : rangeMode === 'previous-month'
+      ? "O'tgan oyning to'liq davri"
+      : rangeMode === 'all'
+        ? 'Butun tarixdagi barcha buyurtmalar'
+        : 'Tanlangan sana oralig‘i';
 
   const {
     data: orderDetailData,
@@ -600,12 +658,43 @@ export const Orders = () => {
 
   const order = orderDetailData?.data?.order;
 
+  const handleRangeMode = (mode) => {
+    setRangeMode(mode);
+    setPage(1);
+    if (mode === 'current-month' || mode === 'previous-month') {
+      const preset = rangeForPreset(mode);
+      setFromDate(preset.startDate);
+      setToDate(preset.endDate);
+    }
+    if (mode === 'all') {
+      setFromDate('');
+      setToDate('');
+    }
+  };
+
+  const handleCustomDateChange = (field, value) => {
+    if (field === 'from') setFromDate(value);
+    else setToDate(value);
+    setRangeMode('custom');
+    setPage(1);
+  };
+
+  const resetExtraFilters = () => {
+    setStatusFilter('');
+    setClientFilter('');
+    setClientFilterLabel('');
+    setPage(1);
+  };
+
+  // "Tozalash" — barcha shartlarni emas, FAQAT standart holatga (shu oy) qaytaradi.
   const clearFilters = () => {
     setStatusFilter('');
     setClientFilter('');
     setClientFilterLabel('');
-    setFromDate('');
-    setToDate('');
+    setRangeMode('current-month');
+    const preset = rangeForPreset('current-month');
+    setFromDate(preset.startDate);
+    setToDate(preset.endDate);
     setPage(1);
   };
 
@@ -864,7 +953,7 @@ export const Orders = () => {
       try {
         iframe.contentWindow.focus();
         iframe.contentWindow.print();
-      } catch (err) {
+      } catch {
         showToast('Chop etishda xatolik yuz berdi.', 'error');
         cleanup();
       }
@@ -1055,7 +1144,8 @@ export const Orders = () => {
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Buyurtmalar</h1>
             <p className="text-sm text-gray-500 mt-0.5">
-              {meta.total ? `Jami ${meta.total} ta buyurtma` : 'Buyurtmalarni boshqarish'}
+              <span className="font-medium text-gray-700">{rangeLabel}</span>
+              {summary ? ` · ${summary.orders} ta buyurtma · ${formatNumber(summary.amount)} $` : ''}
             </p>
           </div>
           <button
@@ -1066,58 +1156,145 @@ export const Orders = () => {
           </button>
         </div>
 
-        <div className="bg-white rounded-2xl border border-gray-200 p-4 mb-4 flex flex-col md:flex-row gap-3 md:items-center">
-          <div className="flex-1 min-w-[220px]">
-            <AsyncSearchSelect
-              fetchUrl={CLIENTS_URL}
-              dataKey="clients"
-              value={clientFilter}
-              displayValue={clientFilterLabel}
-              onSelect={(opt) => {
-                setClientFilter(opt._id);
-                setClientFilterLabel(opt.name);
-                setPage(1);
-              }}
-              onClear={() => {
-                setClientFilter('');
-                setClientFilterLabel('');
-                setPage(1);
-              }}
-              placeholder="Mijoz bo‘yicha qidirish..."
-              labelKey="name"
-              subLabelKey="phone"
-              emptyText="Mijoz topilmadi"
-            />
+        {/* ---------- DAVR TANLAGICHI (ko'zga tashlanadigan, sodda) ---------- */}
+        <div className="bg-white rounded-2xl border border-gray-200 p-4 mb-4">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 mb-2">
+                <CalendarRange size={16} className="text-blue-600" />
+                <p className="text-sm font-semibold text-gray-800">Qaysi davr buyurtmalari?</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { id: 'current-month', label: 'Shu oy' },
+                  { id: 'previous-month', label: "O'tgan oy" },
+                  { id: 'all', label: 'Barcha vaqt' },
+                ].map((preset) => {
+                  const isActive = rangeMode === preset.id;
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => handleRangeMode(preset.id)}
+                      className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border text-sm font-medium transition ${
+                        isActive
+                          ? 'border-blue-600 bg-blue-600 text-white shadow-sm'
+                          : 'border-gray-200 bg-white text-gray-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700'
+                      }`}
+                    >
+                      {isActive && <CheckCircle2 size={14} />}
+                      {preset.label}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => handleRangeMode('custom')}
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border text-sm font-medium transition ${
+                    rangeMode === 'custom'
+                      ? 'border-blue-300 bg-blue-50 text-blue-700'
+                      : 'border-dashed border-gray-300 bg-white text-gray-500 hover:border-blue-300 hover:text-blue-700'
+                  }`}
+                >
+                  <Calendar size={14} />
+                  Sana bo‘yicha
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-lg bg-gray-50 px-3 py-2 lg:text-right">
+              <p className="text-[10px] uppercase tracking-wider text-gray-400">Ko‘rsatilayotgan davr</p>
+              <p className="text-sm font-semibold text-gray-800">{rangeLabel}</p>
+              <p className="text-[11px] text-gray-400">{rangeCaption}</p>
+            </div>
           </div>
-          <select
-            value={statusFilter}
-            onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-          >
-            <option value="">Barcha holatlar</option>
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>{STATUS_LABELS[s]}</option>
-            ))}
-          </select>
-          <input
-            type="date"
-            value={fromDate}
-            onChange={(e) => { setFromDate(e.target.value); setPage(1); }}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-          />
-          <input
-            type="date"
-            value={toDate}
-            onChange={(e) => { setToDate(e.target.value); setPage(1); }}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-          />
-          {(statusFilter || clientFilter || fromDate || toDate) && (
-            <button
-              onClick={clearFilters}
-              className="px-3 py-2 text-sm text-gray-500 hover:text-gray-700 whitespace-nowrap"
+
+          {rangeMode === 'custom' && (
+            <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50/50 p-3 flex flex-col sm:flex-row sm:items-end gap-3">
+              <label className="flex-1 text-xs font-medium text-gray-600">
+                Boshlanish sanasi
+                <input
+                  type="date"
+                  value={fromDate}
+                  max={toDate || undefined}
+                  onChange={(e) => handleCustomDateChange('from', e.target.value)}
+                  className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                />
+              </label>
+              <label className="flex-1 text-xs font-medium text-gray-600">
+                Tugash sanasi
+                <input
+                  type="date"
+                  value={toDate}
+                  min={fromDate || undefined}
+                  onChange={(e) => handleCustomDateChange('to', e.target.value)}
+                  className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => handleRangeMode('current-month')}
+                className="px-3 py-2 text-sm font-medium text-gray-600 border border-gray-300 bg-white rounded-lg hover:bg-gray-50 whitespace-nowrap"
+              >
+                Shu oyga qaytish
+              </button>
+            </div>
+          )}
+
+          <div className="mt-3 flex flex-col md:flex-row gap-3 md:items-center">
+            <div className="flex-1 min-w-[220px]">
+              <AsyncSearchSelect
+                fetchUrl={CLIENTS_URL}
+                dataKey="clients"
+                value={clientFilter}
+                displayValue={clientFilterLabel}
+                onSelect={(opt) => {
+                  setClientFilter(opt._id);
+                  setClientFilterLabel(opt.name);
+                  setPage(1);
+                }}
+                onClear={() => {
+                  setClientFilter('');
+                  setClientFilterLabel('');
+                  setPage(1);
+                }}
+                placeholder="Mijoz bo‘yicha qidirish..."
+                labelKey="name"
+                subLabelKey="phone"
+                emptyText="Mijoz topilmadi"
+              />
+            </div>
+            <select
+              value={statusFilter}
+              onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+              className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
             >
-              Tozalash
-            </button>
+              <option value="">Barcha holatlar</option>
+              {STATUS_OPTIONS.map((s) => (
+                <option key={s} value={s}>{STATUS_LABELS[s]}</option>
+              ))}
+            </select>
+            {(!isDefaultRange || hasExtraFilters) && (
+              <button
+                onClick={clearFilters}
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 whitespace-nowrap"
+              >
+                <RotateCcw size={14} />
+                Tozalash
+              </button>
+            )}
+          </div>
+
+          {/* Davr bo'yicha qisqa yig'indi — sahifalashdan qat'i nazar */}
+          {summary && summary.orders > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-gray-100 pt-3 text-xs text-gray-500">
+              <span><span className="font-semibold text-gray-800">{summary.orders}</span> ta buyurtma</span>
+              <span>Summa: <span className="font-semibold text-gray-800">{formatNumber(summary.amount)} $</span></span>
+              <span>Vazn: <span className="font-semibold text-gray-800">{formatNumber(summary.kg)} kg</span></span>
+              {summary.cancelled > 0 && (
+                <span>Bekor qilingan: <span className="font-semibold text-rose-600">{summary.cancelled}</span></span>
+              )}
+            </div>
           )}
         </div>
 
@@ -1155,18 +1332,37 @@ export const Orders = () => {
                     <tr>
                       <td colSpan={5} className="px-4 py-16 text-center">
                         <ShoppingCart className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                        <p className="text-gray-600 font-medium mb-1">Buyurtma topilmadi</p>
-                        <p className="text-sm text-gray-400 mb-4">
-                          {statusFilter || clientFilter || fromDate || toDate ? 'Qidiruv shartlariga mos buyurtma yo‘q.' : 'Hali birorta buyurtma qo‘shilmagan.'}
+                        <p className="text-gray-700 font-semibold mb-1">
+                          {hasExtraFilters ? 'Tanlangan shartlarga mos buyurtma topilmadi' : emptyTitle}
                         </p>
-                        {!statusFilter && !clientFilter && !fromDate && !toDate && (
+                        <p className="text-sm text-gray-400 mb-5 max-w-md mx-auto">
+                          {hasExtraFilters ? 'Mijoz yoki holat filtrini o‘zgartirib ko‘ring.' : emptyDescription}
+                        </p>
+                        <div className="flex flex-wrap items-center justify-center gap-2">
+                          {hasExtraFilters ? (
+                            <button
+                              onClick={resetExtraFilters}
+                              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                            >
+                              <RotateCcw size={16} /> Filtrlarni tozalash
+                            </button>
+                          ) : (
+                            rangeMode !== 'all' && (
+                              <button
+                                onClick={() => handleRangeMode('all')}
+                                className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                              >
+                                <Calendar size={16} /> Barcha vaqtni ko‘rish
+                              </button>
+                            )
+                          )}
                           <button
                             onClick={openCreateModal}
-                            className="text-sm font-medium text-blue-600 hover:text-blue-800 inline-flex items-center gap-1"
+                            className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 shadow-sm"
                           >
-                            <Plus size={16} /> Birinchi buyurtmani qo‘shish
+                            <Plus size={16} /> Yangi buyurtma
                           </button>
-                        )}
+                        </div>
                       </td>
                     </tr>
                   ) : (

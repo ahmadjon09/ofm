@@ -138,6 +138,9 @@ function dayKeyRange(value, offsetMinutes = getTimezoneOffsetMinutes()) {
     const month = Number(match[2]);
     const day = Number(match[3]);
     if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    // Haqiqiy kalendar sanasi ekanligini tekshiramiz (masalan 2026-02-31 noto'g'ri).
+    const probe = new Date(Date.UTC(year, month - 1, day));
+    if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) return null;
     const start = localDateToUtcInstant(year, month, day, offsetMinutes);
     const endExclusive = localDateToUtcInstant(year, month, day + 1, offsetMinutes);
     return {
