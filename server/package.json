@@ -9,6 +9,7 @@
     "dev": "node --watch server.js",
     "test": "node scripts/kassa-stats-test.mjs && node scripts/kassa-api-test.mjs && node scripts/kassa-http-test.mjs",
     "test:kassa": "node scripts/kassa-stats-test.mjs && node scripts/kassa-api-test.mjs && node scripts/kassa-http-test.mjs",
+    "test:period": "node scripts/period-api-test.mjs",
     "smoke": "node scripts/smoke-test.mjs"
   },
   "engines": {

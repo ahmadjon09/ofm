@@ -4,149 +4,142 @@ import { dashboardStore, getCache, setCache } from '../lib/cache.js';
 import { Client, Order, Product } from '../models/index.js';
 import {
     addLocalDays,
-    currentMonthKey,
+    formatDayKey,
     getTimezoneOffsetMinutes,
     getTimezoneOffsetMs,
+    listDayKeys,
     localParts,
     monthKeyRange,
-    normalizeMonthKey,
-    parseMonthKey,
     shiftMonthKey,
     startOfLocalDay,
     UZ_MONTH_NAMES,
 } from '../lib/datetime.js';
+import {
+    comparisonLabel,
+    previousPeriodRange,
+    resolvePeriodRange,
+    serializeRange,
+} from '../lib/period.js';
+
+const MAX_DAILY_CHART_DAYS = 62;
+
+const STATUS_LABELS = {
+    pending: 'Kutilmoqda',
+    processing: 'Jarayonda',
+    completed: 'Bajarilgan',
+    cancelled: 'Bekor qilingan',
+};
+
+const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
 /**
- * Berilgan oy kaliti bo'yicha Dashboard statistikasini hisoblaydi.
- * - Kumulyativ ko'rsatkichlar (jami mahsulotlar, mijozlar, jami buyurtmalar,
- *   jami qarz, ombor qiymati, 6 oylik trend) — doim barcha davr bo'yicha.
- * - Tanlangan oyga bog'liq ko'rsatkichlar (oylik savdo, oylik daromad, kunlik
- *   trend, eng ko'p sotilgan mahsulotlar, so'nggi buyurtmalar, holat taqsimoti)
- *   — faqat shu oyning ma'lumotlari bilan hisoblanadi.
- * - Balans (kassa) alohida /kassa endpointidan olinadi va kumulyativ qoladi.
+ * Dashboard statistikasi — YAGONA VAQT DOIRASI bo'yicha.
+ *
+ * MUHIM QOIDA: barcha asosiy ko'rsatkichlar (buyurtmalar soni, tushum, aktiv
+ * mijozlar, o'rtacha chek, top mahsulotlar, holatlar taqsimoti, grafiklar)
+ * tanlangan davr uchun hisoblanadi. Standart davr — JORIY OY (1-kunidan
+ * bugungacha). "Barcha davr" yig'indisi faqat foydalanuvchi ataylab
+ * "Barcha vaqt" ni tanlaganda ko'rsatiladi.
+ *
+ * Faqat ombor qoldig'i va mijoz qarzi — bu DAVR emas, BUGUNGI HOLAT (balans)
+ * ko'rsatkichlari. Ular alohida guruhda, aniq izoh bilan qaytariladi.
  */
-async function computeStats(monthKey, offsetMinutes, offsetMs) {
-    const parsed = parseMonthKey(monthKey);
-    const now = new Date();
+async function computeStats(range, now, offsetMinutes, offsetMs) {
+    const rangeFilter = range.start && range.endExclusive
+        ? { createdAt: { $gte: range.start, $lt: range.endExclusive } }
+        : {};
+    const notCancelledRangeFilter = { ...rangeFilter, status: { $ne: 'cancelled' } };
 
-    // ---- Vaqt chegaralari ----
-    // Tanlangan oy (yoki joriy oy, agar monthKey bo'lmasa)
-    const selectedRange = monthKeyRange(monthKey, offsetMinutes);
-    const startOfSelectedMonth = selectedRange.start;
-    const endOfSelectedMonthExclusive = selectedRange.endExclusive;
-
-    // Oldingi oy (o'sish foizini hisoblash uchun)
-    const prevMonthKey = shiftMonthKey(monthKey, -1);
-    const prevRange = monthKeyRange(prevMonthKey, offsetMinutes);
-    const startOfPrevMonth = prevRange.start;
-    const endOfPrevMonthExclusive = prevRange.endExclusive;
-
-    // Bugun (faqat joriy oyda bo'lsak "bugungi savdo" ko'rsatkichi ishlaydi)
-    const nowParts = localParts(now, offsetMinutes);
-    const isCurrentMonth = nowParts.year === parsed.year && nowParts.month === parsed.month;
+    // ---- Bugungi kun chegaralari ----
     const startOfToday = startOfLocalDay(now, offsetMinutes);
+    const startOfTomorrow = addLocalDays(startOfToday, 1, offsetMinutes);
 
-    // Trendlar:
-    // - 6 oylik daromad dinamikasi — tanlangan oygacha bo'lgan 6 oy (kontekst uchun)
-    const sixMonthsAgo = monthKeyRange(shiftMonthKey(monthKey, -5), offsetMinutes).start;
-    // - Kunlik trend — tanlangan oyning barcha kunlari (30 kun emas!)
-    const daysInSelected = [];
-    {
-        let cursor = startOfSelectedMonth;
-        let guard = 0;
-        while (cursor.getTime() < endOfSelectedMonthExclusive.getTime() && guard < 40) {
-            daysInSelected.push(cursor);
-            cursor = addLocalDays(cursor, 1, offsetMinutes);
-            guard += 1;
-        }
-    }
-    const startOfSelectedForDaily = startOfSelectedMonth;
+    // ---- Taqqoslash davri (o'sish foizi uchun) ----
+    const prevRange = previousPeriodRange(range, { now, offsetMinutes });
+    const prevFilter = prevRange ? { createdAt: { $gte: prevRange.start, $lt: prevRange.endExclusive } } : null;
+
+    // ---- Oylik trend: davr tugagan oydan boshlab 6 oy ----
+    const rangeEndParts = range.endExclusive
+        ? localParts(new Date(range.endExclusive.getTime() - 1), offsetMinutes)
+        : localParts(now, offsetMinutes);
+    const anchorMonthKey = `${rangeEndParts.year}-${String(rangeEndParts.month).padStart(2, '0')}`;
+    const trendStart = monthKeyRange(shiftMonthKey(anchorMonthKey, -5), offsetMinutes).start;
+    const trendEndExclusive = monthKeyRange(anchorMonthKey, offsetMinutes).endExclusive;
+
+    // ---- Kunlik trend oynasi ----
+    // Davr 62 kungacha bo'lsa — davrning har bir kuni; aks holda (barcha vaqt
+    // yoki juda uzoq davr) — so'nggi 30 kun. Bu grafikni o'qishga qulay qiladi.
+    const usePeriodForDaily = !!(range.start && range.endExclusive && range.days && range.days <= MAX_DAILY_CHART_DAYS);
+    const dailyStart = usePeriodForDaily ? range.start : startOfLocalDay(addLocalDays(now, -29), offsetMinutes);
+    const dailyEndExclusive = usePeriodForDaily ? range.endExclusive : startOfLocalDay(addLocalDays(now, 1), offsetMinutes);
+    const dailyMode = usePeriodForDaily ? 'period' : 'last-30-days';
 
     const [
-        totalProducts,
-        totalClients,
-        totalOrders,
-        todaysOrders,
-        monthlyOrders,
-        lastMonthOrders,
-        revenueAggAllTime,
+        statusBreakdown,
+        activeClientIds,
+        newClients,
         revenueAgg,
-        lastMonthRevenueAgg,
-        debtAgg,
-        totalKgAgg,
-        topProductsAllTime,
-        topProducts,
+        itemsAgg,
         latestOrders,
+        topProductsAgg,
         monthlyTrend,
         dailyTrend,
-        statusBreakdown,
+        stockAgg,
+        productCount,
+        debtAgg,
         topClients,
+        todayOrders,
+        todayRevenueAgg,
+        prevOrders,
+        prevRevenueAgg,
     ] = await Promise.all([
-        Product.countDocuments({}),
-        Client.countDocuments({}),
-        Order.countDocuments({}),
-        // Bugungi buyurtmalar — faqat tanlangan oy joriy oy bo'lsa; aks holda 0
-        isCurrentMonth
-            ? Order.countDocuments({ createdAt: { $gte: startOfToday } })
-            : Promise.resolve(0),
-        // Oylik buyurtmalar — tanlangan oy
-        Order.countDocuments({ createdAt: { $gte: startOfSelectedMonth, $lt: endOfSelectedMonthExclusive } }),
-        // O'tgan oy buyurtmalar (o'sish uchun)
-        Order.countDocuments({ createdAt: { $gte: startOfPrevMonth, $lt: endOfPrevMonthExclusive } }),
-
-        // Umumiy daromad (barcha davr) — balans kabi kumulyativ ko'rsatkich
+        // Davr bo'yicha holatlar taqsimoti
         Order.aggregate([
-            { $match: { status: { $ne: 'cancelled' } } },
-            { $group: { _id: null, total: { $sum: '$orderTotal' } } },
-        ]),
-        // Tanlangan oy daromadi
-        Order.aggregate([
+            { $match: rangeFilter },
             {
-                $match: {
-                    status: { $ne: 'cancelled' },
-                    createdAt: { $gte: startOfSelectedMonth, $lt: endOfSelectedMonthExclusive },
+                $group: {
+                    _id: '$status',
+                    count: { $sum: 1 },
+                    total: { $sum: '$orderTotal' },
                 },
             },
-            { $group: { _id: null, total: { $sum: '$orderTotal' } } },
         ]),
-        // O'tgan oy daromadi
+
+        // Davrda kamida bitta (bekor qilinmagan) buyurtma bergan mijozlar
+        Order.distinct('client', notCancelledRangeFilter),
+
+        // Davrda qo'shilgan yangi mijozlar
+        Client.countDocuments(rangeFilter),
+
+        // Davr tushumi (bekor qilingan buyurtmalarsiz)
         Order.aggregate([
-            {
-                $match: {
-                    status: { $ne: 'cancelled' },
-                    createdAt: { $gte: startOfPrevMonth, $lt: endOfPrevMonthExclusive },
-                },
-            },
+            { $match: notCancelledRangeFilter },
             { $group: { _id: null, total: { $sum: '$orderTotal' } } },
         ]),
 
-        // Jami qarz — kumulyativ
-        Client.aggregate([{ $group: { _id: null, total: { $sum: '$debt' } } }]),
-
-        // Ombor — kumulyativ
-        Product.aggregate([
-            { $unwind: "$sizes" },
+        // Davrda sotilgan kg va qutilar
+        Order.aggregate([
+            { $match: notCancelledRangeFilter },
+            { $unwind: '$items' },
             {
                 $group: {
                     _id: null,
-                    warehouseValue: {
-                        $sum: {
-                            $multiply: [
-                                { $ifNull: ["$sizes.total", 0] },
-                                { $ifNull: ["$sizes.price", 0] }
-                            ]
-                        }
-                    },
-                    warehouseKg: {
-                        $sum: { $ifNull: ["$sizes.total", 0] }
-                    },
+                    kg: { $sum: '$items.quantityKg' },
+                    boxes: { $sum: '$items.quantityBoxes' },
                 },
             },
         ]),
 
-        // TOP-5 mahsulotlar — barcha davr (kumulyativ)
+        // Davrning so'nggi buyurtmalari
+        Order.find(rangeFilter)
+            .populate('client', 'name phone')
+            .sort({ createdAt: -1 })
+            .limit(10)
+            .lean(),
+
+        // Davrda eng ko'p sotilgan mahsulotlar (TOP-5)
         Order.aggregate([
-            { $match: { status: { $ne: 'cancelled' } } },
+            { $match: notCancelledRangeFilter },
             { $unwind: '$items' },
             {
                 $group: {
@@ -159,19 +152,12 @@ async function computeStats(monthKey, offsetMinutes, offsetMs) {
             { $limit: 5 },
         ]),
 
-        // So'nggi 10 buyurtma — tanlangan oy
-        Order.find({ createdAt: { $gte: startOfSelectedMonth, $lt: endOfSelectedMonthExclusive } })
-            .populate('client', 'name phone')
-            .sort({ createdAt: -1 })
-            .limit(10)
-            .lean(),
-
-        // 6 oylik trend — tanlangan oygacha
+        // 6 oylik daromad dinamikasi (kontekst uchun)
         Order.aggregate([
             {
                 $match: {
                     status: { $ne: 'cancelled' },
-                    createdAt: { $gte: sixMonthsAgo, $lt: endOfSelectedMonthExclusive },
+                    createdAt: { $gte: trendStart, $lt: trendEndExclusive },
                 },
             },
             {
@@ -187,12 +173,12 @@ async function computeStats(monthKey, offsetMinutes, offsetMs) {
             { $sort: { '_id.year': 1, '_id.month': 1 } },
         ]),
 
-        // Kunlik trend — tanlangan oyning barcha kunlari
+        // Kunlik daromad
         Order.aggregate([
             {
                 $match: {
                     status: { $ne: 'cancelled' },
-                    createdAt: { $gte: startOfSelectedForDaily, $lt: endOfSelectedMonthExclusive },
+                    createdAt: { $gte: dailyStart, $lt: dailyEndExclusive },
                 },
             },
             {
@@ -209,138 +195,235 @@ async function computeStats(monthKey, offsetMinutes, offsetMs) {
             { $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 } },
         ]),
 
-        // Buyurtma holatlari — tanlangan oy
-        Order.aggregate([
-            { $match: { createdAt: { $gte: startOfSelectedMonth, $lt: endOfSelectedMonthExclusive } } },
+        // Ombor qoldig'i (bugungi holat)
+        Product.aggregate([
+            { $unwind: '$sizes' },
             {
                 $group: {
-                    _id: '$status',
-                    count: { $sum: 1 },
-                    total: { $sum: '$orderTotal' },
+                    _id: null,
+                    warehouseValue: {
+                        $sum: {
+                            $multiply: [
+                                { $ifNull: ['$sizes.total', 0] },
+                                { $ifNull: ['$sizes.price', 0] },
+                            ],
+                        },
+                    },
+                    warehouseKg: { $sum: { $ifNull: ['$sizes.total', 0] } },
+                    warehouseBoxes: { $sum: { $ifNull: ['$sizes.boxes', 0] } },
                 },
             },
         ]),
+        Product.countDocuments({}),
 
-        // Eng ko'p qarzdor mijozlar — kumulyativ (qarzga oy cheklovi yo'q)
-        Client.find({})
+        // Mijozlar qarzi (bugungi holat)
+        Client.aggregate([
+            { $match: { debt: { $gt: 0 } } },
+            { $group: { _id: null, total: { $sum: '$debt' }, count: { $sum: 1 } } },
+        ]),
+
+        // Eng ko'p qarzdor mijozlar (bugungi holat)
+        Client.find({ debt: { $gt: 0 } })
             .sort({ debt: -1 })
             .limit(5)
             .select('name phone debt')
             .lean(),
+
+        // Bugun
+        Order.countDocuments({ createdAt: { $gte: startOfToday, $lt: startOfTomorrow } }),
+        Order.aggregate([
+            {
+                $match: {
+                    status: { $ne: 'cancelled' },
+                    createdAt: { $gte: startOfToday, $lt: startOfTomorrow },
+                },
+            },
+            { $group: { _id: null, total: { $sum: '$orderTotal' } } },
+        ]),
+
+        // Taqqoslash davri
+        prevFilter ? Order.countDocuments(prevFilter) : Promise.resolve(null),
+        prevFilter
+            ? Order.aggregate([
+                { $match: { ...prevFilter, status: { $ne: 'cancelled' } } },
+                { $group: { _id: null, total: { $sum: '$orderTotal' } } },
+            ])
+            : Promise.resolve(null),
     ]);
 
-    const monthNames = UZ_MONTH_NAMES;
+    // ---- Holatlar bo'yicha yig'indi ----
+    const statusCounts = { pending: 0, completed: 0, cancelled: 0 };
+    const statusAmounts = { pending: 0, completed: 0, cancelled: 0 };
+    for (const row of statusBreakdown) {
+        if (statusCounts[row._id] === undefined) {
+            statusCounts[row._id] = 0;
+            statusAmounts[row._id] = 0;
+        }
+        statusCounts[row._id] += row.count || 0;
+        statusAmounts[row._id] += row.total || 0;
+    }
 
-    // ---- 6 oylik trendni shakllantirish ----
+    const periodOrders = statusBreakdown.reduce((sum, row) => sum + (row.count || 0), 0);
+    const cancelledOrders = statusCounts.cancelled || 0;
+    const completedOrders = statusCounts.completed || 0;
+    const pendingOrders = (periodOrders - cancelledOrders - completedOrders) || 0;
+
+    const revenue = roundMoney(revenueAgg[0]?.total || 0);
+    const billableOrders = Math.max(periodOrders - cancelledOrders, 0);
+    const avgOrderValue = billableOrders > 0 ? roundMoney(revenue / billableOrders) : 0;
+
+    const activeClients = (activeClientIds || []).filter(Boolean).length;
+    const totalKg = Math.round((itemsAgg[0]?.kg || 0) * 100) / 100;
+    const totalBoxes = Math.round(itemsAgg[0]?.boxes || 0);
+
+    // ---- O'sish foizi (faqat taqqoslash uchun baza mavjud bo'lsa) ----
+    const prevRevenue = roundMoney(prevRevenueAgg?.[0]?.total || 0);
+    const prevOrderCount = prevOrders || 0;
+    const percentChange = (current, previous) => (
+        previous > 0 ? Number((((current - previous) / previous) * 100).toFixed(1)) : null
+    );
+    const growth = {
+        revenuePercent: prevRange ? percentChange(revenue, prevRevenue) : null,
+        ordersPercent: prevRange ? percentChange(periodOrders, prevOrderCount) : null,
+        comparisonLabel: comparisonLabel(range),
+        previousRevenue: prevRevenue,
+        previousOrders: prevOrderCount,
+    };
+
+    // ---- Grafiklar ----
     const monthlyTrendMap = new Map(
-        monthlyTrend.map((m) => [`${m._id.year}-${String(m._id.month).padStart(2, '0')}`, m])
+        monthlyTrend.map((row) => [`${row._id.year}-${String(row._id.month).padStart(2, '0')}`, row])
     );
     const monthlyRevenueTrend = [];
     for (let i = 5; i >= 0; i -= 1) {
-        const key = shiftMonthKey(monthKey, -i);
-        const p = parseMonthKey(key);
+        const key = shiftMonthKey(anchorMonthKey, -i);
+        const [year, month] = key.split('-').map(Number);
         const found = monthlyTrendMap.get(key);
         monthlyRevenueTrend.push({
-            month: monthNames[p.month - 1],
-            year: p.year,
+            key,
+            month: UZ_MONTH_NAMES[month - 1],
+            year,
             revenue: found?.revenue || 0,
             ordersCount: found?.ordersCount || 0,
         });
     }
 
-    // ---- Kunlik trend (tanlangan oyning har bir kuni) ----
     const dailyTrendMap = new Map(
-        dailyTrend.map((d) => [`${d._id.year}-${d._id.month}-${d._id.day}`, d])
+        dailyTrend.map((row) => [`${row._id.year}-${row._id.month}-${row._id.day}`, row])
     );
-    const dailyRevenueTrend = daysInSelected.map((day) => {
-        const parts = localParts(day, offsetMinutes);
-        const key = `${parts.year}-${parts.month}-${parts.day}`;
-        const found = dailyTrendMap.get(key);
+    const dailyRevenueTrend = listDayKeys(dailyStart, dailyEndExclusive, offsetMinutes).map((dayKey) => {
+        const [year, month, day] = dayKey.split('-').map(Number);
+        const found = dailyTrendMap.get(`${year}-${month}-${day}`);
         return {
-            date: `${String(parts.day).padStart(2, '0')}.${String(parts.month).padStart(2, '0')}`,
+            date: `${String(day).padStart(2, '0')}.${String(month).padStart(2, '0')}`,
+            fullDate: dayKey,
             revenue: found?.revenue || 0,
             ordersCount: found?.ordersCount || 0,
         };
     });
 
-    // ---- Holatlar taqsimoti ----
-    const statusLabels = {
-        pending: 'Kutilmoqda',
-        processing: 'Jarayonda',
-        completed: 'Bajarilgan',
-        cancelled: 'Bekor qilingan',
-    };
-    const orderStatusChart = statusBreakdown.map((s) => ({
-        status: s._id,
-        label: statusLabels[s._id] || s._id,
-        count: s.count,
-        total: s.total,
+    const orderStatusChart = Object.entries(statusCounts)
+        .filter(([, count]) => count > 0)
+        .map(([status, count]) => ({
+            status,
+            label: STATUS_LABELS[status] || status,
+            count,
+            total: roundMoney(statusAmounts[status] || 0),
+        }));
+
+    const topProducts = topProductsAgg.map((row) => ({
+        name: row._id || "Noma'lum mahsulot",
+        quantityKg: Math.round((row.totalQuantityKg || 0) * 100) / 100,
+        revenue: roundMoney(row.totalRevenue || 0),
     }));
 
-    // ---- TOP mahsulotlar ----
-    const topProductsChart = topProductsAllTime.map((p) => ({
-        name: p._id,
-        quantityKg: p.totalQuantityKg,
-        revenue: p.totalRevenue,
-    }));
+    const warehouseValue = roundMoney(stockAgg[0]?.warehouseValue || 0);
+    const warehouseKg = Math.round((stockAgg[0]?.warehouseKg || 0) * 100) / 100;
+    const warehouseBoxes = Math.round(stockAgg[0]?.warehouseBoxes || 0);
+    const totalDebt = roundMoney(debtAgg[0]?.total || 0);
+    const debtorsCount = debtAgg[0]?.count || 0;
 
-    // ---- O'sish ko'rsatkichlari (oy nisbat oy) ----
-    const selectedRevenue = revenueAgg[0]?.total || 0;
-    const lastMonthRevenue = lastMonthRevenueAgg[0]?.total || 0;
-    const totalRevenueAllTime = revenueAggAllTime[0]?.total || 0;
+    const todayRevenue = roundMoney(todayRevenueAgg[0]?.total || 0);
+    const rangeInfo = serializeRange(range);
 
-    const revenueGrowthPercent = lastMonthRevenue > 0
-        ? Number((((selectedRevenue - lastMonthRevenue) / lastMonthRevenue) * 100).toFixed(1))
-        : (selectedRevenue > 0 ? 100 : 0);
+    const payload = {
+        // ---- Qo'llanilgan davr (UI shu ma'lumotga tayanadi) ----
+        range: rangeInfo,
 
-    const ordersGrowthPercent = lastMonthOrders > 0
-        ? Number((((monthlyOrders - lastMonthOrders) / lastMonthOrders) * 100).toFixed(1))
-        : (monthlyOrders > 0 ? 100 : 0);
-
-    const warehouseValue = totalKgAgg[0]?.warehouseValue || 0;
-    const warehouseKg = totalKgAgg[0]?.warehouseKg || 0;
-
-    return {
-        // Tanlangan oy haqida ma'lumot
-        selectedMonth: monthKey,
-        selectedMonthLabel: selectedRange.label,
-        currentMonth: currentMonthKey(new Date(), offsetMinutes),
-        isCurrentMonth,
-
-        // Kumulyativ ko'rsatkichlar (oyga bog'liq emas)
-        totalProducts,
-        totalClients,
-        totalOrders,
-        totalDebt: debtAgg[0]?.total || 0,
-        totalKg: warehouseKg,
-        warehouseValue: warehouseValue,
-        totalRevenueAllTime,
-
-        // Tanlangan oy ko'rsatkichlari
-        todaysOrders: isCurrentMonth ? todaysOrders : 0,
-        monthlyOrders,
-        revenue: selectedRevenue,
-
-        // O'sish (o'tgan oyga nisbatan)
-        growth: {
-            revenuePercent: revenueGrowthPercent,
-            ordersPercent: ordersGrowthPercent,
-            lastMonthRevenue,
-            lastMonthOrders,
-            selectedMonthLabel: selectedRange.label,
-            previousMonthLabel: prevRange.label,
+        // ---- DAVR ko'rsatkichlari (asosiy metrikalar) ----
+        period: {
+            orders: periodOrders,
+            revenue,
+            avgOrderValue,
+            activeClients,
+            newClients,
+            completedOrders,
+            pendingOrders,
+            cancelledOrders,
+            cancelledAmount: roundMoney(statusAmounts.cancelled || 0),
+            totalKg,
+            totalBoxes,
+            hasOrders: periodOrders > 0,
         },
 
-        topProducts: topProductsChart,
-        latestOrders,
+        // ---- Taqqoslash ----
+        previous: {
+            range: serializeRange(prevRange),
+            orders: prevRange ? prevOrderCount : null,
+            revenue: prevRange ? prevRevenue : null,
+        },
+        growth,
 
+        // ---- BUGUNGI HOLAT (davrga bog'liq emas) ----
+        stock: {
+            products: productCount,
+            value: warehouseValue,
+            kg: warehouseKg,
+            boxes: warehouseBoxes,
+        },
+        debts: {
+            total: totalDebt,
+            debtors: debtorsCount,
+        },
+        today: {
+            orders: todayOrders,
+            revenue: todayRevenue,
+            inRange: !!range.includesToday,
+        },
+
+        // ---- Ro'yxatlar va grafiklar (davr bo'yicha) ----
+        topProducts,
+        latestOrders,
         charts: {
             monthlyRevenueTrend,
             dailyRevenueTrend,
+            daily: {
+                mode: dailyMode,
+                label: dailyMode === 'period' ? range.label : "So'nggi 30 kun",
+                startDate: formatDayKey(dailyStart, offsetMinutes),
+                endDate: formatDayKey(new Date(dailyEndExclusive.getTime() - 1), offsetMinutes),
+            },
             orderStatusChart,
+            // Qarzdorlik — balans ko'rsatkichi, davrga bog'lanmaydi
             topClientsByDebt: topClients,
         },
+
+        // ---- Moslik uchun eski maydonlar (eski klientlar buzilmasin) ----
+        selectedMonth: range.monthKey,
+        selectedMonthLabel: range.label,
+        isCurrentMonth: range.isCurrentMonth,
+        totalProducts: productCount,
+        totalClients: activeClients,
+        totalOrders: periodOrders,
+        monthlyOrders: periodOrders,
+        revenue,
+        totalDebt,
+        totalKg: warehouseKg,
+        warehouseValue,
+        todaysOrders: todayOrders,
     };
+
+    return payload;
 }
 
 const dashboardController = {
@@ -348,38 +431,28 @@ const dashboardController = {
         const now = new Date();
         const offsetMinutes = getTimezoneOffsetMinutes();
         const offsetMs = getTimezoneOffsetMs();
-        const currentKey = currentMonthKey(now, offsetMinutes);
 
-        // ---- So'rovdan oyni aniqlash ----
-        const rawMonth = req.query.month ? String(req.query.month).trim() : '';
-        let monthKey;
-        if (rawMonth) {
-            const normalized = normalizeMonthKey(rawMonth);
-            if (!normalized) {
-                return res.status(400).json({
-                    success: false,
-                    message: `Oy formati noto'g'ri: "${req.query.month}". YYYY-MM ko'rinishida yuboring (masalan: 2026-09).`,
-                });
-            }
-            monthKey = normalized;
-        } else {
-            monthKey = currentKey;
-        }
+        // Standart: JORIY OY. Noto'g'ri parametrlar uchun period lib 400 beradi.
+        const range = resolvePeriodRange(req.query, { now, offsetMinutes });
 
-        // ---- Keshlash (oy bo'yicha) ----
-        const cacheKey = monthKey;
-        if (dashboardStore.monthKey === cacheKey) {
+        const cacheKey = [
+            range.mode,
+            range.start ? range.start.toISOString() : 'all',
+            range.endExclusive ? range.endExclusive.toISOString() : 'all',
+        ].join('|');
+
+        if (dashboardStore.cacheKey === cacheKey) {
             const cached = getCache(dashboardStore);
             if (cached) {
                 return sendSuccess(res, 200, "Statistika ma'lumotlari.", cached);
             }
         }
-        // Boshqa oy tanlangan bo'lsa — eski keshni tozalaymiz
-        dashboardStore.monthKey = null;
+        // Boshqa davr tanlangan bo'lsa — eski keshni tozalaymiz
+        dashboardStore.cacheKey = null;
 
-        const payload = await computeStats(monthKey, offsetMinutes, offsetMs);
+        const payload = await computeStats(range, now, offsetMinutes, offsetMs);
 
-        dashboardStore.monthKey = cacheKey;
+        dashboardStore.cacheKey = cacheKey;
         setCache(dashboardStore, payload, config.dashboardCacheTtl);
         return sendSuccess(res, 200, "Statistika ma'lumotlari.", payload);
     },

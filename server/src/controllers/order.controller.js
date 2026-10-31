@@ -2,6 +2,10 @@ import mongoose from 'mongoose';
 import { ApiError, sendSuccess, isValidObjectId, requireFields, parsePagination, buildMeta } from '../lib/helpers.js';
 import { Client, Order, Product } from '../models/index.js';
 import { clearDashboardCache } from '../lib/cache.js';
+import { resolvePeriodRange, serializeRange } from '../lib/period.js';
+
+const ORDER_STATUSES = ['pending', 'completed', 'cancelled'];
+const round2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
 // Buyurtma ichidagi mahsulotlarni omborga qaytarish
 async function restoreOrderStock(order, session) {
@@ -139,18 +143,32 @@ const orderController = {
 
     async list(req, res) {
         const { page, limit, skip } = parsePagination(req.query);
-        const { status, clientId, from, to } = req.query;
+        const { status, clientId } = req.query;
+
+        // Standart davr — FAQAT JORIY OY (oyning 1-kunidan bugungacha).
+        // Barcha vaqt kerak bo'lsa: ?range=all
+        // Aniq davr kerak bo'lsa: ?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+        const range = resolvePeriodRange(req.query);
 
         const filter = {};
-        if (status) filter.status = status;
-        if (clientId && isValidObjectId(clientId)) filter.client = clientId;
-        if (from || to) {
-            filter.createdAt = {};
-            if (from) filter.createdAt.$gte = new Date(from);
-            if (to) filter.createdAt.$lte = new Date(to);
+
+        const statusValue = typeof status === 'string' ? status.trim() : '';
+        if (statusValue && statusValue !== 'all') {
+            if (!ORDER_STATUSES.includes(statusValue)) {
+                throw new ApiError(400, `Buyurtma holati noto'g'ri: "${statusValue}". Ruxsat etilgan qiymatlar: ${ORDER_STATUSES.join(', ')}.`);
+            }
+            filter.status = statusValue;
         }
 
-        const [orders, total] = await Promise.all([
+        if (clientId && isValidObjectId(clientId)) {
+            filter.client = new mongoose.Types.ObjectId(clientId);
+        }
+
+        if (range.start && range.endExclusive) {
+            filter.createdAt = { $gte: range.start, $lt: range.endExclusive };
+        }
+
+        const [orders, total, summaryAgg] = await Promise.all([
             Order.find(filter)
                 .select('client items orderTotal totalKg totalBoxes status createdAt')
                 .populate('client', 'name phone debt')
@@ -159,9 +177,60 @@ const orderController = {
                 .limit(limit)
                 .lean(),
             Order.countDocuments(filter),
+            // Butun davr bo'yicha yig'indi (sahifaga bog'liq emas)
+            Order.aggregate([
+                { $match: filter },
+                {
+                    $group: {
+                        _id: null,
+                        amount: {
+                            $sum: {
+                                $cond: [{ $eq: ['$status', 'cancelled'] }, 0, { $ifNull: ['$orderTotal', 0] }],
+                            },
+                        },
+                        kg: {
+                            $sum: {
+                                $cond: [{ $eq: ['$status', 'cancelled'] }, 0, { $ifNull: ['$totalKg', 0] }],
+                            },
+                        },
+                        boxes: {
+                            $sum: {
+                                $cond: [{ $eq: ['$status', 'cancelled'] }, 0, { $ifNull: ['$totalBoxes', 0] }],
+                            },
+                        },
+                        cancelled: {
+                            $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] },
+                        },
+                        completed: {
+                            $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] },
+                        },
+                        pending: {
+                            $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] },
+                        },
+                    },
+                },
+            ]),
         ]);
 
-        return sendSuccess(res, 200, "Buyurtmalar ro'yxati.", { orders }, buildMeta(total, page, limit));
+        const totals = summaryAgg[0] || {};
+        const summary = {
+            orders: total,
+            amount: round2(totals.amount || 0),
+            kg: round2(totals.kg || 0),
+            boxes: Math.round(totals.boxes || 0),
+            cancelled: totals.cancelled || 0,
+            completed: totals.completed || 0,
+            pending: totals.pending || 0,
+        };
+
+        // `range` meta ichida — klient "qaysi davr ko'rsatilayotganini" aniq biladi.
+        return sendSuccess(
+            res,
+            200,
+            "Buyurtmalar ro'yxati.",
+            { orders, summary },
+            { ...buildMeta(total, page, limit), range: serializeRange(range) }
+        );
     },
 
     async getById(req, res) {
